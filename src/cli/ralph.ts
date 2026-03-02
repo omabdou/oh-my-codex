@@ -1,5 +1,6 @@
 import { startMode, updateModeState } from '../modes/base.js';
 import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
+import type { RalphPrdPolicy } from '../ralph/contract.js';
 
 const RALPH_HELP = `omx ralph - Launch Codex with ralph persistence mode active
 
@@ -8,6 +9,7 @@ Usage:
 
 Options:
   --help, -h    Show this help message
+  --no-prd      Skip PRD auto-scaffold (does not bypass ralplan-first gate)
 
 Ralph persistence mode initializes state tracking so the OMC ralph loop
 can maintain context across Codex sessions.
@@ -27,6 +29,78 @@ const VALUE_TAKING_FLAGS = new Set([
   '--images-dir',
 ]);
 
+export interface RalphLaunchArgs {
+  forwardedArgs: string[];
+  taskDescription: string;
+  prdPolicy: RalphPrdPolicy;
+}
+
+export interface RalphCommandDependencies {
+  cwd?: string;
+  launchWithHud?: (args: string[]) => Promise<void>;
+  ensureArtifacts?: typeof ensureCanonicalRalphArtifacts;
+  startModeFn?: typeof startMode;
+  updateModeStateFn?: typeof updateModeState;
+  logger?: (message: string) => void;
+}
+
+export function normalizeRalphLaunchArgs(args: readonly string[]): RalphLaunchArgs {
+  const forwardedArgs: string[] = [];
+  const words: string[] = [];
+  let prdPolicy: RalphPrdPolicy = 'required';
+  let i = 0;
+
+  while (i < args.length) {
+    const token = args[i];
+
+    if (token === '--') {
+      forwardedArgs.push(token);
+      for (let j = i + 1; j < args.length; j++) {
+        forwardedArgs.push(args[j]);
+        words.push(args[j]);
+      }
+      break;
+    }
+
+    if (token === '--no-prd') {
+      prdPolicy = 'opt_out';
+      i++;
+      continue;
+    }
+
+    if (token.startsWith('--') && token.includes('=')) {
+      forwardedArgs.push(token);
+      i++;
+      continue;
+    }
+
+    if (token.startsWith('-') && VALUE_TAKING_FLAGS.has(token)) {
+      forwardedArgs.push(token);
+      if (i + 1 < args.length) {
+        forwardedArgs.push(args[i + 1]);
+      }
+      i += 2;
+      continue;
+    }
+
+    if (token.startsWith('-')) {
+      forwardedArgs.push(token);
+      i++;
+      continue;
+    }
+
+    forwardedArgs.push(token);
+    words.push(token);
+    i++;
+  }
+
+  return {
+    forwardedArgs,
+    taskDescription: words.join(' ') || 'ralph-cli-launch',
+    prdPolicy,
+  };
+}
+
 /**
  * Extract the human-readable task description from ralph CLI argv,
  * excluding option flags and their values.
@@ -39,76 +113,59 @@ const VALUE_TAKING_FLAGS = new Set([
  *  - Positional tokens (not starting with `-`): collected as task text
  */
 export function extractRalphTaskDescription(args: readonly string[]): string {
-  const words: string[] = [];
-  let i = 0;
-
-  while (i < args.length) {
-    const token = args[i];
-
-    // `--` separator: everything remaining is task text
-    if (token === '--') {
-      for (let j = i + 1; j < args.length; j++) {
-        words.push(args[j]);
-      }
-      break;
-    }
-
-    // --flag=value: skip entire token
-    if (token.startsWith('--') && token.includes('=')) {
-      i++;
-      continue;
-    }
-
-    // Known value-taking flag: skip this token and the next (its value)
-    if (token.startsWith('-') && VALUE_TAKING_FLAGS.has(token)) {
-      i += 2; // skip flag + value
-      continue;
-    }
-
-    // Any other flag: skip as boolean
-    if (token.startsWith('-')) {
-      i++;
-      continue;
-    }
-
-    // Positional argument: part of the task description
-    words.push(token);
-    i++;
-  }
-
-  return words.join(' ') || 'ralph-cli-launch';
+  return normalizeRalphLaunchArgs(args).taskDescription;
 }
 
-export async function ralphCommand(args: string[]): Promise<void> {
-  const cwd = process.cwd();
+async function launchRalph(args: string[], launchWithHudOverride?: (args: string[]) => Promise<void>): Promise<void> {
+  if (launchWithHudOverride) {
+    await launchWithHudOverride(args);
+    return;
+  }
+  // Dynamic import avoids a circular dependency with index.ts
+  const { launchWithHud } = await import('./index.js');
+  await launchWithHud(args);
+}
+
+export async function ralphCommand(args: string[], deps: RalphCommandDependencies = {}): Promise<void> {
+  const cwd = deps.cwd ?? process.cwd();
+  const logger = deps.logger ?? ((message: string) => console.log(message));
+  const ensureArtifacts = deps.ensureArtifacts ?? ensureCanonicalRalphArtifacts;
+  const startModeFn = deps.startModeFn ?? startMode;
+  const updateModeStateFn = deps.updateModeStateFn ?? updateModeState;
 
   if (args[0] === '--help' || args[0] === '-h') {
-    console.log(RALPH_HELP);
+    logger(RALPH_HELP);
     return;
   }
 
+  const normalized = normalizeRalphLaunchArgs(args);
+
   // Initialize ralph persistence artifacts (state dirs, legacy PRD/progress migration)
-  const artifacts = await ensureCanonicalRalphArtifacts(cwd);
+  const artifacts = await ensureArtifacts(cwd, undefined, {
+    prdPolicy: normalized.prdPolicy,
+    ensurePrd: normalized.prdPolicy !== 'opt_out',
+    taskDescription: normalized.taskDescription,
+  });
 
   // Write initial ralph mode state
-  const task = extractRalphTaskDescription(args);
-  await startMode('ralph', task, 50);
-  await updateModeState('ralph', {
+  await startModeFn('ralph', normalized.taskDescription, 50);
+  await updateModeStateFn('ralph', {
     current_phase: 'starting',
+    prd_policy: normalized.prdPolicy,
     canonical_progress_path: artifacts.canonicalProgressPath,
     ...(artifacts.canonicalPrdPath ? { canonical_prd_path: artifacts.canonicalPrdPath } : {}),
   });
 
   if (artifacts.migratedPrd) {
-    console.log(`[ralph] Migrated legacy PRD -> ${artifacts.canonicalPrdPath}`);
+    logger(`[ralph] Migrated legacy PRD -> ${artifacts.canonicalPrdPath}`);
+  }
+  if (artifacts.scaffoldedPrd) {
+    logger(`[ralph] Created canonical PRD scaffold -> ${artifacts.canonicalPrdPath}`);
   }
   if (artifacts.migratedProgress) {
-    console.log(`[ralph] Migrated legacy progress -> ${artifacts.canonicalProgressPath}`);
+    logger(`[ralph] Migrated legacy progress -> ${artifacts.canonicalProgressPath}`);
   }
 
-  console.log('[ralph] Ralph persistence mode active. Launching Codex...');
-
-  // Dynamic import avoids a circular dependency with index.ts
-  const { launchWithHud } = await import('./index.js');
-  await launchWithHud(args);
+  logger('[ralph] Ralph persistence mode active. Launching Codex...');
+  await launchRalph(normalized.forwardedArgs, deps.launchWithHud);
 }

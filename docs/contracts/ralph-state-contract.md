@@ -10,9 +10,11 @@ Ralph runtime state is stored at `.omx/state/{scope}/ralph-state.json` and MUST 
 - `current_phase: string` **(required while active)**
 - `started_at: ISO8601 string` **(required while active)**
 - `completed_at?: ISO8601 string`
+- `prd_policy: required | opt_out` (defaults to `required`)
+- `ralph_prd_policy_normalized_from?: string` (persisted when an invalid policy is normalized to `required`)
 - Optional linkage fields: `linked_ultrawork`, `linked_ecomode`, `linked_team`, `linked_mode`, `linked_team_terminal_phase`, `linked_team_terminal_at`
 
-Legacy phase aliases may be normalized for compatibility, but persisted values MUST end in the frozen enum below.
+Legacy phase aliases may be normalized for compatibility, but persisted values MUST end in the frozen enum below. Invalid `prd_policy` values MUST be normalized to `required` and recorded in `ralph_prd_policy_normalized_from`.
 
 ## Frozen Ralph phase vocabulary
 
@@ -59,3 +61,13 @@ starting
   - `.omx/prd.json` migrates one-way to canonical PRD markdown when no canonical PRD exists.
   - `.omx/progress.txt` migrates one-way to canonical `ralph-progress.json` when no canonical ledger exists.
   - Legacy files remain read-only compatibility artifacts for one release cycle.
+
+
+## Canonical PRD policy semantics
+
+- Allowed `prd_policy` values: `required | opt_out`
+- Missing `prd_policy` defaults to `required`
+- `--no-prd` maps to `prd_policy=opt_out` in persisted Ralph state
+- `opt_out` means **skip PRD auto-scaffold only**; it does **NOT** bypass the ralplan-first requirement for both `prd-*.md` and `test-spec-*.md`
+- Invalid `prd_policy` values are normalized to `required` and persisted with `ralph_prd_policy_normalized_from: <original>`
+- `--no-prd` MUST be removed from forwarded Codex launch args before `launchWithHud(...)`

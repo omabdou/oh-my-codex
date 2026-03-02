@@ -25,7 +25,7 @@ import {
 } from './state-paths.js';
 import { withModeRuntimeContext } from '../state/mode-state-context.js';
 import { ensureTmuxHookInitialized } from '../cli/tmux-hook.js';
-import { RALPH_PHASES, validateAndNormalizeRalphState } from '../ralph/contract.js';
+import { RALPH_PHASES, RALPH_PRD_POLICIES, validateAndNormalizeRalphState } from '../ralph/contract.js';
 import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
 import { shouldAutoStartMcpServer } from './bootstrap.js';
 import {
@@ -287,6 +287,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           iteration: { type: 'number' },
           max_iterations: { type: 'number' },
           current_phase: { type: 'string' },
+          prd_policy: {
+            type: 'string',
+            enum: [...RALPH_PRD_POLICIES],
+            description: 'Ralph PRD policy. Defaults to required; opt_out skips PRD auto-scaffold only.',
+          },
           task_description: { type: 'string' },
           started_at: { type: 'string' },
           completed_at: { type: 'string' },
@@ -864,7 +869,13 @@ export async function handleStateToolCall(request: {
             validation.state.ralph_phase_normalized_from = originalPhase;
           }
           Object.assign(mergedRaw, validation.state);
-          await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId);
+          await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId, {
+            prdPolicy: String(validation.state.prd_policy || 'required'),
+            ensurePrd: validation.state.prd_policy !== 'opt_out',
+            taskDescription: typeof validation.state.task_description === 'string'
+              ? validation.state.task_description
+              : undefined,
+          });
         }
 
         const merged = withModeRuntimeContext(existing, mergedRaw);

@@ -297,7 +297,7 @@ export async function generateOverlay(cwd: string, sessionId?: string): Promise<
 
     sections.push({
       key: 'ralph_planning_gate',
-      text: `**Ralph Ralplan-First Gate:** ${gateStatus}\n- Requirement: complete planning artifacts before implementation/tool execution.\n- ${details}\n- Path: \`.omx/plans/\``,
+      text: `**Ralph Ralplan-First Gate:** ${gateStatus}\n- Requirement: complete planning artifacts before implementation/tool execution.\n- Policy: \`prd_policy=opt_out\` / \`--no-prd\` skips PRD auto-scaffold only; it does **not** bypass this gate.\n- ${details}\n- Path: \`.omx/plans/\``,
       optional: false,
     });
   }

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,6 +67,77 @@ describe('ensureCanonicalRalphArtifacts', () => {
       // Legacy artifacts remain untouched for compatibility window.
       assert.equal(await readFile(legacyPrdPath, 'utf-8'), legacyPrdBefore);
       assert.equal(await readFile(legacyProgressPath, 'utf-8'), legacyProgressBefore);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('adds -1 and -2 suffixes when scaffold filename collisions occur', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-ralph-scaffold-collision-'));
+    try {
+      const plansDir = join(cwd, '.omx', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      // Reserve names without creating canonical PRD files.
+      await mkdir(join(plansDir, 'prd-collision-demo.md'));
+      await mkdir(join(plansDir, 'prd-collision-demo-1.md'));
+
+      const result = await ensureCanonicalRalphArtifacts(cwd, undefined, {
+        prdPolicy: 'required',
+        ensurePrd: true,
+        taskDescription: 'Collision Demo',
+      });
+
+      assert.equal(result.scaffoldedPrd, true);
+      assert.ok(result.canonicalPrdPath);
+      assert.match(result.canonicalPrdPath!, /prd-collision-demo-2\.md$/);
+      assert.equal(existsSync(result.canonicalPrdPath!), true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not scaffold PRD when prd_policy is opt_out', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-ralph-opt-out-'));
+    try {
+      const result = await ensureCanonicalRalphArtifacts(cwd, undefined, {
+        prdPolicy: 'opt_out',
+        ensurePrd: false,
+        taskDescription: 'Do not scaffold',
+      });
+
+      assert.equal(result.scaffoldedPrd, false);
+      assert.equal(result.canonicalPrdPath, undefined);
+
+      const plansDir = join(cwd, '.omx', 'plans');
+      const files = await readdir(plansDir);
+      assert.equal(files.some((file) => /^prd-.*\.md$/i.test(file)), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('is idempotent when canonical prd already exists', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-ralph-idempotent-'));
+    try {
+      const first = await ensureCanonicalRalphArtifacts(cwd, undefined, {
+        prdPolicy: 'required',
+        ensurePrd: true,
+        taskDescription: 'Idempotent Session',
+      });
+      assert.equal(first.scaffoldedPrd, true);
+      assert.ok(first.canonicalPrdPath);
+
+      const second = await ensureCanonicalRalphArtifacts(cwd, undefined, {
+        prdPolicy: 'required',
+        ensurePrd: true,
+        taskDescription: 'Idempotent Session',
+      });
+      assert.equal(second.scaffoldedPrd, false);
+      assert.equal(second.canonicalPrdPath, first.canonicalPrdPath);
+
+      const files = await readdir(join(cwd, '.omx', 'plans'));
+      const prdFiles = files.filter((file) => /^prd-.*\.md$/i.test(file));
+      assert.equal(prdFiles.length, 1);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

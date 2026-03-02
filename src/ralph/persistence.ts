@@ -1,8 +1,9 @@
 import { createHash } from 'crypto';
-import { existsSync } from 'fs';
+import { existsSync, type Dirent } from 'fs';
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { getStateDir } from '../mcp/state-paths.js';
+import { normalizeRalphPrdPolicy, type RalphPrdPolicy } from './contract.js';
 
 const LEGACY_PRD_PATH = '.omx/prd.json';
 const LEGACY_PROGRESS_PATH = '.omx/progress.txt';
@@ -14,6 +15,13 @@ export interface RalphCanonicalArtifacts {
   canonicalProgressPath: string;
   migratedPrd: boolean;
   migratedProgress: boolean;
+  scaffoldedPrd: boolean;
+}
+
+export interface EnsureCanonicalRalphArtifactsOptions {
+  ensurePrd?: boolean;
+  prdPolicy?: RalphPrdPolicy | string;
+  taskDescription?: string;
 }
 
 function sha256(text: string): string {
@@ -64,11 +72,22 @@ function resolveLegacyPrdTitle(parsed: Record<string, unknown>): string {
 async function listCanonicalPrdFiles(cwd: string): Promise<string[]> {
   const plansDir = join(cwd, '.omx', 'plans');
   if (!existsSync(plansDir)) return [];
-  const files = await readdir(plansDir).catch(() => [] as string[]);
-  return files
-    .filter((file) => file.startsWith(PRD_PREFIX) && file.endsWith(PRD_SUFFIX))
+  const entries = await readdir(plansDir, { withFileTypes: true }).catch(() => [] as Dirent[]);
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.startsWith(PRD_PREFIX) && entry.name.endsWith(PRD_SUFFIX))
+    .map((entry) => entry.name)
     .sort()
     .map((file) => join(plansDir, file));
+}
+
+export function resolveAvailableCanonicalPrdPath(plansDir: string, baseSlug: string): string {
+  let candidate = join(plansDir, `${PRD_PREFIX}${baseSlug}${PRD_SUFFIX}`);
+  let suffix = 1;
+  while (existsSync(candidate)) {
+    candidate = join(plansDir, `${PRD_PREFIX}${baseSlug}-${suffix}${PRD_SUFFIX}`);
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function splitProgressLines(content: string): string[] {
@@ -125,12 +144,7 @@ async function migrateLegacyPrdIfNeeded(
 
   const title = resolveLegacyPrdTitle(legacyParsed);
   const baseSlug = slugify(title);
-  let canonicalPrdPath = join(plansDir, `prd-${baseSlug}.md`);
-  let counter = 1;
-  while (existsSync(canonicalPrdPath)) {
-    canonicalPrdPath = join(plansDir, `prd-${baseSlug}-${counter}.md`);
-    counter += 1;
-  }
+  const canonicalPrdPath = resolveAvailableCanonicalPrdPath(plansDir, baseSlug);
 
   const markdown = [
     `# ${title}`,
@@ -160,6 +174,67 @@ async function migrateLegacyPrdIfNeeded(
   });
 
   return { canonicalPrdPath, migrated: true };
+}
+
+function resolveScaffoldTitle(taskDescription?: string): string {
+  const trimmed = taskDescription?.trim();
+  if (!trimmed) return 'Ralph Session';
+  return trimmed.length > 120 ? `${trimmed.slice(0, 117)}...` : trimmed;
+}
+
+function buildCanonicalPrdScaffold(title: string): string {
+  return [
+    `# PRD: ${title}`,
+    '',
+    '## Context',
+    '- Problem statement:',
+    '- Scope and assumptions:',
+    '',
+    '## Work Objectives',
+    '- Objective 1:',
+    '- Objective 2:',
+    '',
+    '## Must Have',
+    '- [ ]',
+    '',
+    '## Must NOT Have',
+    '- [ ]',
+    '',
+    '## Acceptance Criteria',
+    '- [ ] Build/tests pass',
+    '- [ ] Behavior validated end-to-end',
+    '',
+  ].join('\n');
+}
+
+async function createCanonicalPrdScaffoldIfNeeded(
+  cwd: string,
+  existingCanonicalPrd: string | undefined,
+  options: EnsureCanonicalRalphArtifactsOptions,
+): Promise<{ canonicalPrdPath?: string; scaffolded: boolean }> {
+  if (existingCanonicalPrd) {
+    return { canonicalPrdPath: existingCanonicalPrd, scaffolded: false };
+  }
+
+  const prdPolicy = normalizeRalphPrdPolicy(options.prdPolicy).policy;
+  const ensurePrd = options.ensurePrd === true;
+  if (!ensurePrd || prdPolicy === 'opt_out') {
+    return { canonicalPrdPath: undefined, scaffolded: false };
+  }
+
+  const legacyPrdPath = join(cwd, LEGACY_PRD_PATH);
+  if (existsSync(legacyPrdPath)) {
+    return { canonicalPrdPath: undefined, scaffolded: false };
+  }
+
+  const plansDir = join(cwd, '.omx', 'plans');
+  await mkdir(plansDir, { recursive: true });
+
+  const title = resolveScaffoldTitle(options.taskDescription);
+  const baseSlug = slugify(options.taskDescription || 'ralph-session');
+  const canonicalPrdPath = resolveAvailableCanonicalPrdPath(plansDir, baseSlug);
+  await writeFile(canonicalPrdPath, buildCanonicalPrdScaffold(title), 'utf-8');
+  return { canonicalPrdPath, scaffolded: true };
 }
 
 async function migrateLegacyProgressIfNeeded(
@@ -201,6 +276,7 @@ async function migrateLegacyProgressIfNeeded(
 export async function ensureCanonicalRalphArtifacts(
   cwd: string,
   sessionId?: string,
+  options: EnsureCanonicalRalphArtifactsOptions = {},
 ): Promise<RalphCanonicalArtifacts> {
   const canonicalProgressPath = join(getStateDir(cwd, sessionId), 'ralph-progress.json');
   await mkdir(join(cwd, '.omx', 'plans'), { recursive: true });
@@ -208,12 +284,14 @@ export async function ensureCanonicalRalphArtifacts(
 
   const canonicalPrdFiles = await listCanonicalPrdFiles(cwd);
   const migratedPrdResult = await migrateLegacyPrdIfNeeded(cwd, canonicalPrdFiles[0]);
+  const scaffoldResult = await createCanonicalPrdScaffoldIfNeeded(cwd, migratedPrdResult.canonicalPrdPath, options);
   const migratedProgress = await migrateLegacyProgressIfNeeded(cwd, canonicalProgressPath);
 
   return {
-    canonicalPrdPath: migratedPrdResult.canonicalPrdPath,
+    canonicalPrdPath: scaffoldResult.canonicalPrdPath,
     canonicalProgressPath,
     migratedPrd: migratedPrdResult.migrated,
     migratedProgress,
+    scaffoldedPrd: scaffoldResult.scaffolded,
   };
 }

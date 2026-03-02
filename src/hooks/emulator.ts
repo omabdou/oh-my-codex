@@ -116,6 +116,7 @@ ${lines}
 Ralplan-first execution gate:
 - Before implementation/tool execution, ensure both artifacts exist in \`.omx/plans/\`: \`prd-*.md\` and \`test-spec-*.md\`.
 - If ralph is active and either artifact is missing, stay in planning mode and do not execute implementation tools.
+- \`opt_out\` / \`--no-prd\` skips PRD auto-scaffold only; it does NOT bypass the ralplan-first gate.
 - Only begin implementation after the planning gate is complete.
 
 To activate a skill, use the corresponding slash command or invoke the skill directly.

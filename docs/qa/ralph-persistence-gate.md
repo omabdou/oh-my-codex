@@ -53,3 +53,17 @@ Every release touching Ralph persistence MUST mention:
 1. session-authoritative scope policy,
 2. legacy compatibility window (`.omx/prd.json` and `.omx/progress.txt`),
 3. opt-in flag behavior for the current release.
+
+
+## PRD policy proof requirements
+
+The release gate MUST include explicit proof for the following contract boundaries:
+
+- Policy normalization marker: `src/mcp/__tests__/state-server-ralph-phase.test.ts` — `normalizes invalid prd_policy to required and records ralph_prd_policy_normalized_from`
+- Missing-policy default: `src/mcp/__tests__/state-server-ralph-phase.test.ts` — `defaults missing prd_policy to required`
+- Collision suffix behavior: `src/ralph/__tests__/persistence.test.ts` — `adds -1 and -2 suffixes when scaffold filename collisions occur`
+- Opt-out scaffold suppression: `src/ralph/__tests__/persistence.test.ts` — `does not scaffold PRD when prd_policy is opt_out`
+- CLI boundary arg stripping proof: `src/cli/__tests__/ralph-command.test.ts` — `strips --no-prd before launchWithHud command invocation`
+- Opt-out state persistence proof: `src/cli/__tests__/ralph-command.test.ts` — `persists prd_policy=opt_out when --no-prd is provided`
+- Opt-out non-bypass gate proof: `src/hooks/__tests__/agents-overlay.test.ts` — `remains BLOCKED when test-spec is missing even with prd_policy opt_out`
+- Guidance text proof: `src/hooks/__tests__/keyword-detector.test.ts` — `asserts explicit non-bypass text appears in generated guidance`

@@ -49,6 +49,14 @@ describe('ralph persistence release gate artifacts', () => {
     }
     assert.match(gate, /OMX_RALPH_PERSISTENCE_PORT=1/);
     assert.match(gate, /compatibility window/i);
+    assert.match(gate, /normalizes invalid prd_policy to required and records ralph_prd_policy_normalized_from/);
+    assert.match(gate, /defaults missing prd_policy to required/);
+    assert.match(gate, /adds -1 and -2 suffixes when scaffold filename collisions occur/);
+    assert.match(gate, /does not scaffold PRD when prd_policy is opt_out/);
+    assert.match(gate, /strips --no-prd before launchWithHud command invocation/);
+    assert.match(gate, /persists prd_policy=opt_out when --no-prd is provided/);
+    assert.match(gate, /remains BLOCKED when test-spec is missing even with prd_policy opt_out/);
+    assert.match(gate, /asserts explicit non-bypass text appears in generated guidance/);
   });
 
   it('requires CI workflow gate job that runs the Ralph persistence matrix tests', () => {

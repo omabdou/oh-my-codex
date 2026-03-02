@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractRalphTaskDescription } from '../ralph.js';
+import { extractRalphTaskDescription, normalizeRalphLaunchArgs } from '../ralph.js';
 
 describe('extractRalphTaskDescription', () => {
   it('returns plain task text from positional args', () => {
@@ -131,5 +131,21 @@ describe('extractRalphTaskDescription', () => {
       extractRalphTaskDescription(['-c=model_reasoning_effort="high"', 'fix', 'bug']),
       'fix bug'
     );
+  });
+
+  it('excludes --no-prd from task text', () => {
+    assert.equal(
+      extractRalphTaskDescription(['--no-prd', 'implement', 'flow']),
+      'implement flow'
+    );
+  });
+});
+
+describe('normalizeRalphLaunchArgs', () => {
+  it('strips --no-prd from forwarded args and resolves opt_out policy', () => {
+    const normalized = normalizeRalphLaunchArgs(['--no-prd', '--model', 'gpt-5', 'ship', 'feature']);
+    assert.deepEqual(normalized.forwardedArgs, ['--model', 'gpt-5', 'ship', 'feature']);
+    assert.equal(normalized.taskDescription, 'ship feature');
+    assert.equal(normalized.prdPolicy, 'opt_out');
   });
 });

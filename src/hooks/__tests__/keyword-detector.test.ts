@@ -110,7 +110,18 @@ describe('keyword detection guidance generation', () => {
     assert.match(section, /Ralplan-first execution gate:/);
     assert.match(section, /`prd-\*\.md`/);
     assert.match(section, /`test-spec-\*\.md`/);
+    assert.match(section, /--no-prd/);
+    assert.match(section, /does NOT bypass the ralplan-first gate/i);
     assert.match(section, /if ralph is active/i);
+  });
+
+  it('asserts explicit non-bypass text appears in generated guidance', () => {
+    const section = generateKeywordDetectionSection();
+
+    assert.match(section, /opt_out/);
+    assert.match(section, /--no-prd/);
+    assert.match(section, /skips PRD auto-scaffold only/i);
+    assert.match(section, /does NOT bypass the ralplan-first gate/i);
   });
 });
 

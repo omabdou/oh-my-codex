@@ -34,6 +34,65 @@ describe('state-server Ralph phase contract', () => {
     }
   });
 
+
+
+  it('normalizes invalid prd_policy to required and records ralph_prd_policy_normalized_from', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-ralph-prd-policy-'));
+    try {
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'ralph',
+            active: true,
+            current_phase: 'starting',
+            prd_policy: 'banana-mode',
+          },
+        },
+      });
+      assert.equal(response.isError, undefined);
+
+      const file = join(wd, '.omx', 'state', 'ralph-state.json');
+      const state = JSON.parse(await readFile(file, 'utf-8'));
+      assert.equal(state.prd_policy, 'required');
+      assert.equal(state.ralph_prd_policy_normalized_from, 'banana-mode');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('defaults missing prd_policy to required', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-ralph-prd-policy-'));
+    try {
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'ralph',
+            active: true,
+            current_phase: 'starting',
+          },
+        },
+      });
+      assert.equal(response.isError, undefined);
+
+      const file = join(wd, '.omx', 'state', 'ralph-state.json');
+      const state = JSON.parse(await readFile(file, 'utf-8'));
+      assert.equal(state.prd_policy, 'required');
+      assert.equal(state.ralph_prd_policy_normalized_from, undefined);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('rejects unknown Ralph phases on state_write', async () => {
     process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
     const { handleStateToolCall } = await import('../state-server.js');

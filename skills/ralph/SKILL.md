@@ -141,12 +141,14 @@ Why bad: These are independent tasks that should run in parallel, not sequential
 </Final_Checklist>
 
 <Advanced>
-## PRD Mode (Optional)
+## PRD Mode / PRD Policy
 
-When the user provides the `--prd` flag, initialize a Product Requirements Document before starting the ralph loop.
+Ralph defaults to `prd_policy=required`, which means it should create a canonical PRD scaffold when needed before continuing the loop.
 
-### Detecting PRD Mode
-Check if `{{PROMPT}}` contains `--prd` or `--PRD`.
+### Detecting PRD Policy
+- Default policy: `required`
+- `--no-prd` maps to `prd_policy=opt_out`
+- `opt_out` / `--no-prd` skips PRD auto-scaffold only; it does **not** bypass the ralplan-first requirement for both `.omx/plans/prd-*.md` and `.omx/plans/test-spec-*.md`
 
 ### PRD Workflow
 1. Create canonical PRD/progress artifacts:
@@ -178,8 +180,11 @@ Check if `{{PROMPT}}` contains `--prd` or `--PRD`.
 6. Proceed to normal ralph loop using user stories as the task list
 
 ### Example
-User input: `--prd build a todo app with React and TypeScript`
-Workflow: Detect flag, extract task, create `.omx/plans/prd-{slug}.md`, create `.omx/state/{scope}/ralph-progress.json`, begin ralph loop.
+User input: `build a todo app with React and TypeScript`
+Workflow: default `prd_policy=required`, extract task, create `.omx/plans/prd-{slug}.md` when missing, create `.omx/state/{scope}/ralph-progress.json`, begin ralph loop.
+
+User input: `--no-prd build a todo app with React and TypeScript`
+Workflow: persist `prd_policy=opt_out`, skip auto-scaffold, but remain blocked until both `.omx/plans/prd-*.md` and `.omx/plans/test-spec-*.md` exist.
 
 ### Legacy compatibility
 - If `.omx/prd.json` exists and canonical PRD is absent, migrate one-way into `.omx/plans/prd-{slug}.md`.

@@ -172,6 +172,26 @@ describe('generateOverlay', () => {
     assert.match(overlay, /`test-spec-\*\.md`/);
   });
 
+  it('remains BLOCKED when test-spec is missing even with prd_policy opt_out', async () => {
+    const sessionId = 'ralph-gate-opt-out-blocked';
+    const sessionDir = join(tempDir, '.omx', 'state', 'sessions', sessionId);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, 'ralph-state.json'),
+      JSON.stringify({ active: true, iteration: 1, max_iterations: 50, current_phase: 'starting', prd_policy: 'opt_out' }),
+    );
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(join(plansDir, 'prd-opt-out.md'), '# PRD\n');
+
+    const overlay = await generateOverlay(tempDir, sessionId);
+    assert.match(overlay, /\*\*Ralph Ralplan-First Gate:\*\* BLOCKED/);
+    assert.match(overlay, /--no-prd/);
+    assert.match(overlay, /skips PRD auto-scaffold only/i);
+    assert.match(overlay, /does \*\*not\*\* bypass this gate/i);
+    assert.match(overlay, /Missing: `test-spec-\*\.md`/);
+  });
+
   it('unlocks ralph planning gate when PRD and test spec exist', async () => {
     const sessionId = 'ralph-gate-unlocked';
     const sessionDir = join(tempDir, '.omx', 'state', 'sessions', sessionId);
