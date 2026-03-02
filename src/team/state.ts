@@ -2,9 +2,46 @@ import { appendFile, readFile, writeFile, mkdir, rm, rename, readdir, stat } fro
 import { join, dirname, resolve, sep } from 'path';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { performance } from 'perf_hooks';
 import { omxStateDir } from '../utils/paths.js';
 import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
+import {
+  computeTaskReadiness as computeTaskReadinessImpl,
+  claimTask as claimTaskImpl,
+  transitionTaskStatus as transitionTaskStatusImpl,
+  releaseTaskClaim as releaseTaskClaimImpl,
+  listTasks as listTasksImpl,
+} from './state/tasks.js';
+import {
+  sendDirectMessage as sendDirectMessageImpl,
+  broadcastMessage as broadcastMessageImpl,
+  markMessageDelivered as markMessageDeliveredImpl,
+  markMessageNotified as markMessageNotifiedImpl,
+  listMailboxMessages as listMailboxMessagesImpl,
+} from './state/mailbox.js';
+import {
+  enqueueDispatchRequest as enqueueDispatchRequestImpl,
+  listDispatchRequests as listDispatchRequestsImpl,
+  readDispatchRequest as readDispatchRequestImpl,
+  transitionDispatchRequest as transitionDispatchRequestImpl,
+  markDispatchRequestNotified as markDispatchRequestNotifiedImpl,
+  markDispatchRequestDelivered as markDispatchRequestDeliveredImpl,
+  normalizeDispatchRequest as normalizeDispatchRequestImpl,
+} from './state/dispatch.js';
+import {
+  resolveDispatchLockTimeoutMs as resolveDispatchLockTimeoutMsImpl,
+  withDispatchLock as withDispatchLockImpl,
+} from './state/dispatch-lock.js';
+import {
+  writeTaskApproval as writeTaskApprovalImpl,
+  readTaskApproval as readTaskApprovalImpl,
+} from './state/approvals.js';
+import {
+  getTeamSummary as getTeamSummaryImpl,
+  readMonitorSnapshot as readMonitorSnapshotImpl,
+  writeMonitorSnapshot as writeMonitorSnapshotImpl,
+  readTeamPhase as readTeamPhaseImpl,
+  writeTeamPhase as writeTeamPhaseImpl,
+} from './state/monitor.js';
 import {
   TEAM_NAME_SAFE_PATTERN,
   WORKER_NAME_SAFE_PATTERN,
@@ -237,11 +274,6 @@ export interface TaskApprovalRecord {
   decided_at: string;
 }
 
-interface TeamSummarySnapshot {
-  workerTurnCountByName: Record<string, number>;
-  workerTaskByName: Record<string, string>;
-}
-
 let renameForAtomicWrite: typeof rename = rename;
 
 export function setWriteAtomicRenameForTests(fn: typeof rename): void {
@@ -251,7 +283,6 @@ export function setWriteAtomicRenameForTests(fn: typeof rename): void {
 export function resetWriteAtomicRenameForTests(): void {
   renameForAtomicWrite = rename;
 }
-
 export type TaskReadiness =
   | { ready: true }
   | { ready: false; reason: 'blocked_dependency'; dependencies: string[] };
@@ -299,13 +330,6 @@ const LOCK_STALE_MS = 5 * 60 * 1000;
 const DEFAULT_DISPATCH_ACK_TIMEOUT_MS = 800;
 const MIN_DISPATCH_ACK_TIMEOUT_MS = 100;
 const MAX_DISPATCH_ACK_TIMEOUT_MS = 10_000;
-
-const OMX_DISPATCH_LOCK_TIMEOUT_ENV = 'OMX_DISPATCH_LOCK_TIMEOUT_MS';
-const DEFAULT_DISPATCH_LOCK_TIMEOUT_MS = 15_000;
-const MIN_DISPATCH_LOCK_TIMEOUT_MS = 1_000;
-const MAX_DISPATCH_LOCK_TIMEOUT_MS = 120_000;
-const DISPATCH_LOCK_INITIAL_POLL_MS = 25;
-const DISPATCH_LOCK_MAX_POLL_MS = 500;
 
 type TeamTaskStatus = TeamTask['status'];
 
@@ -1364,57 +1388,15 @@ export async function updateTask(
 
 // List all tasks sorted by numeric ID
 export async function listTasks(teamName: string, cwd: string): Promise<TeamTask[]> {
-  const tasksRoot = join(teamDir(teamName, cwd), 'tasks');
-  if (!existsSync(tasksRoot)) return [];
-
-  const files = await readdir(tasksRoot, { withFileTypes: true });
-  const matched = files.flatMap((entry) => {
-    if (!entry.isFile()) return [];
-    const m = /^task-(\d+)\.json$/.exec(entry.name);
-    if (!m) return [];
-    return [{ id: m[1], fileName: entry.name }];
+  return await listTasksImpl(teamName, cwd, {
+    teamDir,
+    isTeamTask,
+    normalizeTask,
   });
-
-  const results = await Promise.all(
-    matched.map(async ({ id, fileName }) => {
-      try {
-        const raw = await readFile(join(tasksRoot, fileName), 'utf8');
-        const parsed = JSON.parse(raw) as unknown;
-        if (!isTeamTask(parsed)) return null;
-        const normalized = normalizeTask(parsed);
-        // Ignore corrupt task files whose internal id mismatches filename.
-        if (normalized.id !== id) return null;
-        return normalized;
-      } catch {
-        return null;
-      }
-    })
-  );
-
-  const tasks: TeamTaskV2[] = [];
-  for (const task of results) {
-    if (task) tasks.push(task);
-  }
-
-  tasks.sort((a, b) => Number(a.id) - Number(b.id));
-  return tasks;
 }
 
 export async function computeTaskReadiness(teamName: string, taskId: string, cwd: string): Promise<TaskReadiness> {
-  const task = await readTask(teamName, taskId, cwd);
-  if (!task) return { ready: false, reason: 'blocked_dependency', dependencies: [] };
-
-  const deps = task.depends_on ?? task.blocked_by ?? [];
-  if (deps.length === 0) return { ready: true };
-
-  const depTasks = await Promise.all(deps.map((d) => readTask(teamName, d, cwd)));
-  const incomplete = deps.filter((_, idx) => {
-    const t = depTasks[idx];
-    return !t || t.status !== 'completed';
-  });
-
-  if (incomplete.length > 0) return { ready: false, reason: 'blocked_dependency', dependencies: incomplete };
-  return { ready: true };
+  return await computeTaskReadinessImpl(teamName, taskId, cwd, { readTask });
 }
 
 export async function claimTask(
@@ -1424,67 +1406,17 @@ export async function claimTask(
   expectedVersion: number | null,
   cwd: string
 ): Promise<ClaimTaskResult> {
-  // Validate that the claiming worker is registered in the team.
-  // Without this check, ghost worker IDs (non-existent workers) could claim
-  // tasks, breaking team state integrity and routing assumptions.
-  const cfg = await readTeamConfig(teamName, cwd);
-  if (!cfg || !cfg.workers.some((w) => w.name === workerName)) {
-    return { ok: false, error: 'worker_not_found' };
-  }
-
-  const existing = await readTask(teamName, taskId, cwd);
-  if (!existing) return { ok: false, error: 'task_not_found' };
-  const readiness = await computeTaskReadiness(teamName, taskId, cwd);
-  if (!readiness.ready) {
-    return { ok: false, error: 'blocked_dependency', dependencies: readiness.dependencies };
-  }
-
-  const lock = await withTaskClaimLock(teamName, taskId, cwd, async () => {
-    const current = await readTask(teamName, taskId, cwd);
-    if (!current) return { ok: false as const, error: 'task_not_found' as const };
-    const v = normalizeTask(current);
-    if (expectedVersion !== null && v.version !== expectedVersion) {
-      return { ok: false as const, error: 'claim_conflict' as const };
-    }
-    const readinessAfterLock = await computeTaskReadiness(teamName, taskId, cwd);
-    if (!readinessAfterLock.ready) {
-      return {
-        ok: false as const,
-        error: 'blocked_dependency' as const,
-        dependencies: readinessAfterLock.dependencies,
-      };
-    }
-    if (isTerminalTaskStatus(v.status)) {
-      return { ok: false as const, error: 'already_terminal' as const };
-    }
-    if (v.status === 'in_progress') {
-      return { ok: false as const, error: 'claim_conflict' as const };
-    }
-    if (v.status === 'pending' || v.status === 'blocked') {
-      if (v.claim) {
-        return { ok: false as const, error: 'claim_conflict' as const };
-      }
-      if (v.owner && v.owner !== workerName) {
-        return { ok: false as const, error: 'claim_conflict' as const };
-      }
-    }
-
-    const claimToken = randomUUID();
-    const leasedUntil = new Date(Date.now() + DEFAULT_CLAIM_LEASE_MS).toISOString();
-    const updated: TeamTaskV2 = {
-      ...v,
-      status: 'in_progress',
-      owner: workerName,
-      claim: { owner: workerName, token: claimToken, leased_until: leasedUntil },
-      version: v.version + 1,
-    };
-
-    await writeAtomic(taskFilePath(teamName, taskId, cwd), JSON.stringify(updated, null, 2));
-    return { ok: true as const, task: updated, claimToken };
+  return await claimTaskImpl(taskId, workerName, expectedVersion, {
+    teamName,
+    cwd,
+    readTask,
+    readTeamConfig,
+    withTaskClaimLock,
+    normalizeTask,
+    isTerminalTaskStatus,
+    taskFilePath,
+    writeAtomic,
   });
-
-  if (!lock.ok) return { ok: false, error: 'claim_conflict' };
-  return lock.value;
 }
 
 export async function transitionTaskStatus(
@@ -1495,123 +1427,41 @@ export async function transitionTaskStatus(
   claimToken: string,
   cwd: string
 ): Promise<TransitionTaskResult> {
-  if (!canTransitionTaskStatus(from, to)) {
-    return { ok: false, error: 'invalid_transition' };
-  }
-
-  const lock = await withTaskClaimLock(teamName, taskId, cwd, async () => {
-    const current = await readTask(teamName, taskId, cwd);
-    if (!current) return { ok: false as const, error: 'task_not_found' as const };
-    const v = normalizeTask(current);
-
-    if (isTerminalTaskStatus(v.status)) {
-      return { ok: false as const, error: 'already_terminal' as const };
-    }
-    if (!canTransitionTaskStatus(v.status, to)) {
-      return { ok: false as const, error: 'invalid_transition' as const };
-    }
-    if (v.status !== from) return { ok: false as const, error: 'invalid_transition' as const };
-    if (!v.owner || !v.claim || v.claim.owner !== v.owner || v.claim.token !== claimToken) {
-      return { ok: false as const, error: 'claim_conflict' as const };
-    }
-    if (new Date(v.claim.leased_until) <= new Date()) return { ok: false as const, error: 'lease_expired' as const };
-
-    const completedAt = new Date().toISOString();
-    const updated: TeamTaskV2 = {
-      ...v,
-      status: to,
-      completed_at: completedAt,
-      claim: undefined,
-      version: v.version + 1,
-    };
-    await writeAtomic(taskFilePath(teamName, taskId, cwd), JSON.stringify(updated, null, 2));
-    if (to === 'completed') {
-      await appendTeamEvent(
-        teamName,
-        {
-          type: 'task_completed',
-          worker: updated.owner || 'unknown',
-          task_id: updated.id,
-          message_id: null,
-          reason: undefined,
-        },
-        cwd
-      );
-    } else if (to === 'failed') {
-      await appendTeamEvent(
-        teamName,
-        {
-          type: 'task_failed',
-          worker: updated.owner || 'unknown',
-          task_id: updated.id,
-          message_id: null,
-          reason: updated.error || 'task_failed',
-        },
-        cwd
-      );
-    }
-    return { ok: true as const, task: updated };
+  return await transitionTaskStatusImpl(taskId, from, to, claimToken, {
+    teamName,
+    cwd,
+    readTask,
+    readTeamConfig,
+    withTaskClaimLock,
+    normalizeTask,
+    isTerminalTaskStatus,
+    canTransitionTaskStatus,
+    taskFilePath,
+    writeAtomic,
+    appendTeamEvent,
+    readMonitorSnapshot,
+    writeMonitorSnapshot,
   });
-
-  if (!lock.ok) return { ok: false, error: 'claim_conflict' };
-  // If a task_completed event was emitted via this claim-safe path, record the task ID in
-  // the monitor snapshot so that emitMonitorDerivedEvents does not emit a duplicate event
-  // on the next monitorTeam poll (issue #161).
-  if (to === 'completed') {
-    const existingSnap = await readMonitorSnapshot(teamName, cwd);
-    const updatedSnap: TeamMonitorSnapshotState = existingSnap
-      ? { ...existingSnap, completedEventTaskIds: { ...(existingSnap.completedEventTaskIds ?? {}), [taskId]: true } }
-      : {
-          taskStatusById: {},
-          workerAliveByName: {},
-          workerStateByName: {},
-          workerTurnCountByName: {},
-          workerTaskIdByName: {},
-          mailboxNotifiedByMessageId: {},
-          completedEventTaskIds: { [taskId]: true },
-        };
-    await writeMonitorSnapshot(teamName, updatedSnap, cwd);
-  }
-  return lock.value;
 }
 
 export async function releaseTaskClaim(
   teamName: string,
   taskId: string,
   claimToken: string,
-  _workerName: string,
+  workerName: string,
   cwd: string
 ): Promise<ReleaseTaskClaimResult> {
-  const lock = await withTaskClaimLock(teamName, taskId, cwd, async () => {
-    const current = await readTask(teamName, taskId, cwd);
-    if (!current) return { ok: false as const, error: 'task_not_found' as const };
-    const v = normalizeTask(current);
-    if (v.status === 'pending' && !v.claim && !v.owner) {
-      return { ok: true as const, task: v };
-    }
-
-    if (v.status === 'completed' || v.status === 'failed') {
-      return { ok: false as const, error: 'already_terminal' as const };
-    }
-
-    if (!v.owner || !v.claim || v.claim.owner !== v.owner || v.claim.token !== claimToken) {
-      return { ok: false as const, error: 'claim_conflict' as const };
-    }
-    if (new Date(v.claim.leased_until) <= new Date()) return { ok: false as const, error: 'lease_expired' as const };
-
-    const updated: TeamTaskV2 = {
-      ...v,
-      status: 'pending',
-      owner: undefined,
-      claim: undefined,
-      version: v.version + 1,
-    };
-    await writeAtomic(taskFilePath(teamName, taskId, cwd), JSON.stringify(updated, null, 2));
-    return { ok: true as const, task: updated };
+  return await releaseTaskClaimImpl(taskId, claimToken, workerName, {
+    teamName,
+    cwd,
+    readTask,
+    readTeamConfig,
+    withTaskClaimLock,
+    normalizeTask,
+    isTerminalTaskStatus,
+    taskFilePath,
+    writeAtomic,
   });
-
-  if (!lock.ok) return { ok: false, error: 'claim_conflict' };
-  return lock.value;
 }
 
 export async function appendTeamEvent(teamName: string, event: Omit<TeamEvent, 'event_id' | 'created_at' | 'team'>, cwd: string): Promise<TeamEvent> {
@@ -1647,51 +1497,6 @@ async function writeMailbox(teamName: string, mailbox: TeamMailbox, cwd: string)
   await writeAtomic(p, JSON.stringify(mailbox, null, 2));
 }
 
-function isDispatchKind(value: unknown): value is TeamDispatchRequestKind {
-  return value === 'inbox' || value === 'mailbox' || value === 'nudge';
-}
-
-function isDispatchStatus(value: unknown): value is TeamDispatchRequestStatus {
-  return value === 'pending' || value === 'notified' || value === 'delivered' || value === 'failed';
-}
-
-function normalizeDispatchRequest(
-  teamName: string,
-  raw: Partial<TeamDispatchRequest>,
-  nowIso: string = new Date().toISOString(),
-): TeamDispatchRequest | null {
-  if (!isDispatchKind(raw.kind)) return null;
-  if (typeof raw.to_worker !== 'string' || raw.to_worker.trim() === '') return null;
-  if (typeof raw.trigger_message !== 'string' || raw.trigger_message.trim() === '') return null;
-
-  const status = isDispatchStatus(raw.status) ? raw.status : 'pending';
-  return {
-    request_id: typeof raw.request_id === 'string' && raw.request_id.trim() !== '' ? raw.request_id : randomUUID(),
-    kind: raw.kind,
-    team_name: teamName,
-    to_worker: raw.to_worker,
-    worker_index: typeof raw.worker_index === 'number' ? raw.worker_index : undefined,
-    pane_id: typeof raw.pane_id === 'string' && raw.pane_id !== '' ? raw.pane_id : undefined,
-    trigger_message: raw.trigger_message,
-    message_id: typeof raw.message_id === 'string' && raw.message_id !== '' ? raw.message_id : undefined,
-    inbox_correlation_key:
-      typeof raw.inbox_correlation_key === 'string' && raw.inbox_correlation_key !== '' ? raw.inbox_correlation_key : undefined,
-    transport_preference:
-      raw.transport_preference === 'transport_direct' || raw.transport_preference === 'prompt_stdin'
-        ? raw.transport_preference
-        : 'hook_preferred_with_fallback',
-    fallback_allowed: raw.fallback_allowed !== false,
-    status,
-    attempt_count: Number.isFinite(raw.attempt_count) ? Math.max(0, Math.floor(raw.attempt_count as number)) : 0,
-    created_at: typeof raw.created_at === 'string' && raw.created_at !== '' ? raw.created_at : nowIso,
-    updated_at: typeof raw.updated_at === 'string' && raw.updated_at !== '' ? raw.updated_at : nowIso,
-    notified_at: typeof raw.notified_at === 'string' && raw.notified_at !== '' ? raw.notified_at : undefined,
-    delivered_at: typeof raw.delivered_at === 'string' && raw.delivered_at !== '' ? raw.delivered_at : undefined,
-    failed_at: typeof raw.failed_at === 'string' && raw.failed_at !== '' ? raw.failed_at : undefined,
-    last_reason: typeof raw.last_reason === 'string' && raw.last_reason !== '' ? raw.last_reason : undefined,
-  };
-}
-
 async function readDispatchRequests(teamName: string, cwd: string): Promise<TeamDispatchRequest[]> {
   const path = dispatchRequestsPath(teamName, cwd);
   try {
@@ -1701,7 +1506,7 @@ async function readDispatchRequests(teamName: string, cwd: string): Promise<Team
     if (!Array.isArray(parsed)) return [];
     const nowIso = new Date().toISOString();
     return parsed
-      .map((entry) => normalizeDispatchRequest(teamName, (entry ?? {}) as Partial<TeamDispatchRequest>, nowIso))
+      .map((entry) => normalizeDispatchRequestImpl(teamName, (entry ?? {}) as Partial<TeamDispatchRequest>, nowIso))
       .filter((entry): entry is TeamDispatchRequest => entry !== null);
   } catch {
     return [];
@@ -1713,90 +1518,11 @@ async function writeDispatchRequests(teamName: string, requests: TeamDispatchReq
 }
 
 export function resolveDispatchLockTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[OMX_DISPATCH_LOCK_TIMEOUT_ENV];
-  if (raw === undefined || raw === '') return DEFAULT_DISPATCH_LOCK_TIMEOUT_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return DEFAULT_DISPATCH_LOCK_TIMEOUT_MS;
-  return Math.max(MIN_DISPATCH_LOCK_TIMEOUT_MS, Math.min(MAX_DISPATCH_LOCK_TIMEOUT_MS, Math.floor(parsed)));
+  return resolveDispatchLockTimeoutMsImpl(env);
 }
 
 async function withDispatchLock<T>(teamName: string, cwd: string, fn: () => Promise<T>): Promise<T> {
-  const root = teamDir(teamName, cwd);
-  if (!existsSync(root)) throw new Error(`Team ${teamName} not found`);
-  const lockDir = dispatchLockDir(teamName, cwd);
-  const ownerPath = join(lockDir, 'owner');
-  const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-  const timeoutMs = resolveDispatchLockTimeoutMs(process.env);
-  const deadline = Date.now() + timeoutMs;
-  let pollMs = DISPATCH_LOCK_INITIAL_POLL_MS;
-  await mkdir(dirname(lockDir), { recursive: true });
-
-  while (true) {
-    try {
-      await mkdir(lockDir, { recursive: false });
-      try {
-        await writeFile(ownerPath, ownerToken, 'utf8');
-      } catch (error) {
-        await rm(lockDir, { recursive: true, force: true });
-        throw error;
-      }
-      break;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'EEXIST') throw error;
-      try {
-        const info = await stat(lockDir);
-        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
-          await rm(lockDir, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        // best effort
-      }
-      if (Date.now() > deadline) {
-        throw new Error(
-          `Timed out acquiring dispatch lock for ${teamName} after ${timeoutMs}ms. ` +
-          `Set ${OMX_DISPATCH_LOCK_TIMEOUT_ENV} to increase (current: ${timeoutMs}ms, max: ${MAX_DISPATCH_LOCK_TIMEOUT_MS}ms).`
-        );
-      }
-      // Exponential backoff with jitter to reduce thundering herd
-      const jitter = 0.5 + Math.random() * 0.5;
-      await new Promise((resolve) => setTimeout(resolve, Math.floor(pollMs * jitter)));
-      pollMs = Math.min(pollMs * 2, DISPATCH_LOCK_MAX_POLL_MS);
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    try {
-      const currentOwner = await readFile(ownerPath, 'utf8');
-      if (currentOwner.trim() === ownerToken) {
-        await rm(lockDir, { recursive: true, force: true });
-      }
-    } catch {
-      // best effort
-    }
-  }
-}
-
-function equivalentPendingDispatch(
-  existing: TeamDispatchRequest,
-  input: TeamDispatchRequestInput,
-): boolean {
-  if (existing.status !== 'pending') return false;
-  if (existing.kind !== input.kind) return false;
-  if (existing.to_worker !== input.to_worker) return false;
-
-  if (input.kind === 'mailbox') {
-    return Boolean(input.message_id) && existing.message_id === input.message_id;
-  }
-
-  if (input.kind === 'inbox' && input.inbox_correlation_key) {
-    return existing.inbox_correlation_key === input.inbox_correlation_key;
-  }
-
-  return existing.trigger_message === input.trigger_message;
+  return await withDispatchLockImpl(teamName, cwd, teamDir, dispatchLockDir, fn);
 }
 
 export async function enqueueDispatchRequest(
@@ -1804,35 +1530,13 @@ export async function enqueueDispatchRequest(
   requestInput: TeamDispatchRequestInput,
   cwd: string,
 ): Promise<{ request: TeamDispatchRequest; deduped: boolean }> {
-  if (!isDispatchKind(requestInput.kind)) throw new Error(`Invalid dispatch request kind: ${String(requestInput.kind)}`);
-  if (requestInput.kind === 'mailbox' && (!requestInput.message_id || requestInput.message_id.trim() === '')) {
-    throw new Error('mailbox dispatch requests require message_id');
-  }
-  validateWorkerName(requestInput.to_worker);
-
-  return await withDispatchLock(teamName, cwd, async () => {
-    const requests = await readDispatchRequests(teamName, cwd);
-    const existing = requests.find((req) => equivalentPendingDispatch(req, requestInput));
-    if (existing) return { request: existing, deduped: true };
-
-    const nowIso = new Date().toISOString();
-    const request = normalizeDispatchRequest(
-      teamName,
-      {
-        request_id: randomUUID(),
-        ...requestInput,
-        status: 'pending',
-        attempt_count: 0,
-        created_at: nowIso,
-        updated_at: nowIso,
-      },
-      nowIso,
-    );
-    if (!request) throw new Error('failed_to_normalize_dispatch_request');
-
-    requests.push(request);
-    await writeDispatchRequests(teamName, requests, cwd);
-    return { request, deduped: false };
+  return await enqueueDispatchRequestImpl(requestInput, {
+    teamName,
+    cwd,
+    validateWorkerName,
+    withDispatchLock,
+    readDispatchRequests,
+    writeDispatchRequests,
   });
 }
 
@@ -1841,28 +1545,25 @@ export async function listDispatchRequests(
   cwd: string,
   opts: { status?: TeamDispatchRequestStatus; kind?: TeamDispatchRequestKind; to_worker?: string; limit?: number } = {},
 ): Promise<TeamDispatchRequest[]> {
-  const requests = await readDispatchRequests(teamName, cwd);
-  let filtered = requests;
-  if (opts.status) filtered = filtered.filter((req) => req.status === opts.status);
-  if (opts.kind) filtered = filtered.filter((req) => req.kind === opts.kind);
-  if (opts.to_worker) filtered = filtered.filter((req) => req.to_worker === opts.to_worker);
-  if (typeof opts.limit === 'number' && opts.limit > 0) filtered = filtered.slice(0, opts.limit);
-  return filtered;
+  return await listDispatchRequestsImpl(opts, {
+    teamName,
+    cwd,
+    validateWorkerName,
+    withDispatchLock,
+    readDispatchRequests,
+    writeDispatchRequests,
+  });
 }
 
 export async function readDispatchRequest(teamName: string, requestId: string, cwd: string): Promise<TeamDispatchRequest | null> {
-  const requests = await readDispatchRequests(teamName, cwd);
-  return requests.find((req) => req.request_id === requestId) ?? null;
-}
-
-function canTransitionDispatchStatus(
-  from: TeamDispatchRequestStatus,
-  to: TeamDispatchRequestStatus,
-): boolean {
-  if (from === to) return true;
-  if (from === 'pending' && (to === 'notified' || to === 'failed')) return true;
-  if (from === 'notified' && (to === 'delivered' || to === 'failed')) return true;
-  return false;
+  return await readDispatchRequestImpl(requestId, {
+    teamName,
+    cwd,
+    validateWorkerName,
+    withDispatchLock,
+    readDispatchRequests,
+    writeDispatchRequests,
+  });
 }
 
 export async function transitionDispatchRequest(
@@ -1873,34 +1574,13 @@ export async function transitionDispatchRequest(
   patch: Partial<TeamDispatchRequest> = {},
   cwd: string,
 ): Promise<TeamDispatchRequest | null> {
-  return await withDispatchLock(teamName, cwd, async () => {
-    const requests = await readDispatchRequests(teamName, cwd);
-    const index = requests.findIndex((req) => req.request_id === requestId);
-    if (index < 0) return null;
-    const existing = requests[index]!;
-    if (existing.status !== from && existing.status !== to) return null;
-    if (!canTransitionDispatchStatus(existing.status, to)) return null;
-
-    const nowIso = new Date().toISOString();
-    const nextAttemptCount = Math.max(
-      existing.attempt_count,
-      Number.isFinite(patch.attempt_count)
-        ? Math.floor(patch.attempt_count as number)
-        : (existing.status === to ? existing.attempt_count : existing.attempt_count + 1),
-    );
-    const next: TeamDispatchRequest = {
-      ...existing,
-      ...patch,
-      status: to,
-      attempt_count: Math.max(0, nextAttemptCount),
-      updated_at: nowIso,
-    };
-    if (to === 'notified') next.notified_at = patch.notified_at ?? nowIso;
-    if (to === 'delivered') next.delivered_at = patch.delivered_at ?? nowIso;
-    if (to === 'failed') next.failed_at = patch.failed_at ?? nowIso;
-    requests[index] = next;
-    await writeDispatchRequests(teamName, requests, cwd);
-    return next;
+  return await transitionDispatchRequestImpl(requestId, from, to, patch, {
+    teamName,
+    cwd,
+    validateWorkerName,
+    withDispatchLock,
+    readDispatchRequests,
+    writeDispatchRequests,
   });
 }
 
@@ -1910,10 +1590,14 @@ export async function markDispatchRequestNotified(
   patch: Partial<TeamDispatchRequest> = {},
   cwd: string,
 ): Promise<TeamDispatchRequest | null> {
-  const current = await readDispatchRequest(teamName, requestId, cwd);
-  if (!current) return null;
-  if (current.status === 'notified' || current.status === 'delivered') return current;
-  return await transitionDispatchRequest(teamName, requestId, current.status, 'notified', patch, cwd);
+  return await markDispatchRequestNotifiedImpl(requestId, patch, {
+    teamName,
+    cwd,
+    validateWorkerName,
+    withDispatchLock,
+    readDispatchRequests,
+    writeDispatchRequests,
+  });
 }
 
 export async function markDispatchRequestDelivered(
@@ -1922,10 +1606,14 @@ export async function markDispatchRequestDelivered(
   patch: Partial<TeamDispatchRequest> = {},
   cwd: string,
 ): Promise<TeamDispatchRequest | null> {
-  const current = await readDispatchRequest(teamName, requestId, cwd);
-  if (!current) return null;
-  if (current.status === 'delivered') return current;
-  return await transitionDispatchRequest(teamName, requestId, current.status, 'delivered', patch, cwd);
+  return await markDispatchRequestDeliveredImpl(requestId, patch, {
+    teamName,
+    cwd,
+    validateWorkerName,
+    withDispatchLock,
+    readDispatchRequests,
+    writeDispatchRequests,
+  });
 }
 
 export async function sendDirectMessage(
@@ -1935,25 +1623,15 @@ export async function sendDirectMessage(
   body: string,
   cwd: string
 ): Promise<TeamMailboxMessage> {
-  const msg: TeamMailboxMessage = {
-    message_id: randomUUID(),
-    from_worker: fromWorker,
-    to_worker: toWorker,
-    body,
-    created_at: new Date().toISOString(),
-  };
-  await withMailboxLock(teamName, toWorker, cwd, async () => {
-    const mailbox = await readMailbox(teamName, toWorker, cwd);
-    mailbox.messages.push(msg);
-    await writeMailbox(teamName, mailbox, cwd);
-  });
-
-  await appendTeamEvent(
+  return await sendDirectMessageImpl(fromWorker, toWorker, body, {
     teamName,
-    { type: 'message_received', worker: toWorker, task_id: undefined, message_id: msg.message_id, reason: undefined },
-    cwd
-  );
-  return msg;
+    cwd,
+    withMailboxLock,
+    readMailbox,
+    writeMailbox,
+    appendTeamEvent,
+    readTeamConfig,
+  });
 }
 
 export async function broadcastMessage(
@@ -1962,15 +1640,15 @@ export async function broadcastMessage(
   body: string,
   cwd: string
 ): Promise<TeamMailboxMessage[]> {
-  const cfg = await readTeamConfig(teamName, cwd);
-  if (!cfg) throw new Error(`Team ${teamName} not found`);
-  const targets = cfg.workers.map((w) => w.name);
-  const delivered: TeamMailboxMessage[] = [];
-  for (const to of targets) {
-    if (to === fromWorker) continue;
-    delivered.push(await sendDirectMessage(teamName, fromWorker, to, body, cwd));
-  }
-  return delivered;
+  return await broadcastMessageImpl(fromWorker, body, {
+    teamName,
+    cwd,
+    withMailboxLock,
+    readMailbox,
+    writeMailbox,
+    appendTeamEvent,
+    readTeamConfig,
+  });
 }
 
 export async function markMessageDelivered(
@@ -1979,15 +1657,14 @@ export async function markMessageDelivered(
   messageId: string,
   cwd: string
 ): Promise<boolean> {
-  return withMailboxLock(teamName, workerName, cwd, async () => {
-    const mailbox = await readMailbox(teamName, workerName, cwd);
-    const msg = mailbox.messages.find((m) => m.message_id === messageId);
-    if (!msg) return false;
-    if (!msg.delivered_at) {
-      msg.delivered_at = new Date().toISOString();
-      await writeMailbox(teamName, mailbox, cwd);
-    }
-    return true;
+  return await markMessageDeliveredImpl(workerName, messageId, {
+    teamName,
+    cwd,
+    withMailboxLock,
+    readMailbox,
+    writeMailbox,
+    appendTeamEvent,
+    readTeamConfig,
   });
 }
 
@@ -1997,13 +1674,14 @@ export async function markMessageNotified(
   messageId: string,
   cwd: string
 ): Promise<boolean> {
-  return withMailboxLock(teamName, workerName, cwd, async () => {
-    const mailbox = await readMailbox(teamName, workerName, cwd);
-    const msg = mailbox.messages.find((m) => m.message_id === messageId);
-    if (!msg) return false;
-    msg.notified_at = new Date().toISOString();
-    await writeMailbox(teamName, mailbox, cwd);
-    return true;
+  return await markMessageNotifiedImpl(workerName, messageId, {
+    teamName,
+    cwd,
+    withMailboxLock,
+    readMailbox,
+    writeMailbox,
+    appendTeamEvent,
+    readTeamConfig,
   });
 }
 
@@ -2012,8 +1690,15 @@ export async function listMailboxMessages(
   workerName: string,
   cwd: string
 ): Promise<TeamMailboxMessage[]> {
-  const mailbox = await readMailbox(teamName, workerName, cwd);
-  return mailbox.messages;
+  return await listMailboxMessagesImpl(workerName, {
+    teamName,
+    cwd,
+    withMailboxLock,
+    readMailbox,
+    writeMailbox,
+    appendTeamEvent,
+    readTeamConfig,
+  });
 }
 
 export async function writeTaskApproval(
@@ -2021,19 +1706,13 @@ export async function writeTaskApproval(
   approval: TaskApprovalRecord,
   cwd: string
 ): Promise<void> {
-  const p = approvalPath(teamName, approval.task_id, cwd);
-  await writeAtomic(p, JSON.stringify(approval, null, 2));
-  await appendTeamEvent(
+  await writeTaskApprovalImpl(approval, {
     teamName,
-    {
-      type: 'approval_decision',
-      worker: approval.reviewer,
-      task_id: approval.task_id,
-      message_id: null,
-      reason: `${approval.status}:${approval.decision_reason}`,
-    },
-    cwd
-  );
+    cwd,
+    approvalPath,
+    writeAtomic,
+    appendTeamEvent,
+  });
 }
 
 export async function readTaskApproval(
@@ -2041,131 +1720,29 @@ export async function readTaskApproval(
   taskId: string,
   cwd: string
 ): Promise<TaskApprovalRecord | null> {
-  const p = approvalPath(teamName, taskId, cwd);
-  if (!existsSync(p)) return null;
-  try {
-    const raw = await readFile(p, 'utf-8');
-    const parsed = JSON.parse(raw) as TaskApprovalRecord;
-    if (parsed.task_id !== taskId) return null;
-    if (!['pending', 'approved', 'rejected'].includes(parsed.status)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  return await readTaskApprovalImpl(taskId, {
+    teamName,
+    cwd,
+    approvalPath,
+    writeAtomic,
+    appendTeamEvent,
+  });
 }
 
 // Get team summary with aggregation and non-reporting worker detection
 export async function getTeamSummary(teamName: string, cwd: string): Promise<TeamSummary | null> {
-  const summaryStartMs = performance.now();
-  const cfg = await readTeamConfig(teamName, cwd);
-  if (!cfg) return null;
-
-  const tasksStartMs = performance.now();
-  const tasks = await listTasks(teamName, cwd);
-  const tasksLoadedMs = performance.now() - tasksStartMs;
-  const taskById = new Map(tasks.map((task) => [task.id, task] as const));
-  const previousSnapshot = await readSummarySnapshot(teamName, cwd);
-  const counts = {
-    total: tasks.length,
-    pending: 0,
-    blocked: 0,
-    in_progress: 0,
-    completed: 0,
-    failed: 0,
-  };
-
-  for (const t of tasks) {
-    if (t.status === 'pending') counts.pending++;
-    else if (t.status === 'blocked') counts.blocked++;
-    else if (t.status === 'in_progress') counts.in_progress++;
-    else if (t.status === 'completed') counts.completed++;
-    else if (t.status === 'failed') counts.failed++;
-  }
-
-  const workers = cfg.workers || [];
-  const workerSummaries: TeamSummary['workers'] = [];
-  const nonReportingWorkers: string[] = [];
-  const nextSnapshot: TeamSummarySnapshot = {
-    workerTurnCountByName: {},
-    workerTaskByName: {},
-  };
-
-  const workerPollStartMs = performance.now();
-  const workerSignals = await Promise.all(
-    workers.map(async (worker) => {
-      const [hb, status] = await Promise.all([
-        readWorkerHeartbeat(teamName, worker.name, cwd),
-        readWorkerStatus(teamName, worker.name, cwd),
-      ]);
-      return { worker, hb, status };
-    })
-  );
-  const workersPolledMs = performance.now() - workerPollStartMs;
-
-  for (const { worker: w, hb, status } of workerSignals) {
-
-    const alive = hb?.alive ?? false;
-    const lastTurnAt = hb?.last_turn_at ?? null;
-
-    const currentTaskId = status.current_task_id ?? '';
-    const prevTaskId = previousSnapshot?.workerTaskByName[w.name] ?? '';
-    const prevTurnCount = previousSnapshot?.workerTurnCountByName[w.name] ?? 0;
-    const currentTask = currentTaskId ? taskById.get(currentTaskId) ?? null : null;
-
-    const turnsWithoutProgress =
-      hb &&
-      status.state === 'working' &&
-      currentTask &&
-      (currentTask.status === 'pending' || currentTask.status === 'in_progress') &&
-      currentTaskId === prevTaskId
-        ? Math.max(0, hb.turn_count - prevTurnCount)
-        : 0;
-
-    if (alive && status.state === 'working' && turnsWithoutProgress > 5) {
-      nonReportingWorkers.push(w.name);
-    }
-
-    workerSummaries.push({ name: w.name, alive, lastTurnAt, turnsWithoutProgress });
-    nextSnapshot.workerTurnCountByName[w.name] = hb?.turn_count ?? 0;
-    nextSnapshot.workerTaskByName[w.name] = currentTaskId;
-  }
-
-  await writeSummarySnapshot(teamName, nextSnapshot, cwd);
-
-  return {
-    teamName: cfg.name,
-    workerCount: cfg.worker_count,
-    tasks: counts,
-    workers: workerSummaries,
-    nonReportingWorkers,
-    performance: {
-      total_ms: Number((performance.now() - summaryStartMs).toFixed(2)),
-      tasks_loaded_ms: Number(tasksLoadedMs.toFixed(2)),
-      workers_polled_ms: Number(workersPolledMs.toFixed(2)),
-      task_count: tasks.length,
-      worker_count: workers.length,
-    },
-  };
-}
-
-async function readSummarySnapshot(teamName: string, cwd: string): Promise<TeamSummarySnapshot | null> {
-  const p = summarySnapshotPath(teamName, cwd);
-  if (!existsSync(p)) return null;
-  try {
-    const raw = await readFile(p, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<TeamSummarySnapshot>;
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      workerTurnCountByName: parsed.workerTurnCountByName ?? {},
-      workerTaskByName: parsed.workerTaskByName ?? {},
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function writeSummarySnapshot(teamName: string, snapshot: TeamSummarySnapshot, cwd: string): Promise<void> {
-  await writeAtomic(summarySnapshotPath(teamName, cwd), JSON.stringify(snapshot, null, 2));
+  return await getTeamSummaryImpl({
+    teamName,
+    cwd,
+    readTeamConfig,
+    listTasks,
+    readWorkerHeartbeat,
+    readWorkerStatus,
+    summarySnapshotPath,
+    monitorSnapshotPath,
+    teamPhasePath,
+    writeAtomic,
+  });
 }
 
 // === Shutdown control ===
@@ -2250,39 +1827,7 @@ export async function readMonitorSnapshot(
   teamName: string,
   cwd: string,
 ): Promise<TeamMonitorSnapshotState | null> {
-  const p = monitorSnapshotPath(teamName, cwd);
-  if (!existsSync(p)) return null;
-  try {
-    const raw = await readFile(p, 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<TeamMonitorSnapshotState>;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const monitorTimings = (() => {
-      const candidate = parsed.monitorTimings as TeamMonitorSnapshotState['monitorTimings'];
-      if (!candidate || typeof candidate !== 'object') return undefined;
-      if (
-        typeof candidate.list_tasks_ms !== 'number' ||
-        typeof candidate.worker_scan_ms !== 'number' ||
-        typeof candidate.mailbox_delivery_ms !== 'number' ||
-        typeof candidate.total_ms !== 'number' ||
-        typeof candidate.updated_at !== 'string'
-      ) {
-        return undefined;
-      }
-      return candidate;
-    })();
-    return {
-      taskStatusById: parsed.taskStatusById ?? {},
-      workerAliveByName: parsed.workerAliveByName ?? {},
-      workerStateByName: parsed.workerStateByName ?? {},
-      workerTurnCountByName: parsed.workerTurnCountByName ?? {},
-      workerTaskIdByName: parsed.workerTaskIdByName ?? {},
-      mailboxNotifiedByMessageId: parsed.mailboxNotifiedByMessageId ?? {},
-      completedEventTaskIds: parsed.completedEventTaskIds ?? {},
-      monitorTimings,
-    };
-  } catch {
-    return null;
-  }
+  return await readMonitorSnapshotImpl(teamName, cwd, monitorSnapshotPath);
 }
 
 export async function writeMonitorSnapshot(
@@ -2290,30 +1835,15 @@ export async function writeMonitorSnapshot(
   snapshot: TeamMonitorSnapshotState,
   cwd: string,
 ): Promise<void> {
-  await writeAtomic(monitorSnapshotPath(teamName, cwd), JSON.stringify(snapshot, null, 2));
+  await writeMonitorSnapshotImpl(teamName, snapshot, cwd, monitorSnapshotPath, writeAtomic);
 }
 
 export async function readTeamPhase(
   teamName: string,
   cwd: string,
 ): Promise<TeamPhaseState | null> {
-  const p = teamPhasePath(teamName, cwd);
-  if (!existsSync(p)) return null;
-  try {
-    const raw = await readFile(p, 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<TeamPhaseState>;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const currentPhase = typeof parsed.current_phase === 'string' ? parsed.current_phase : 'team-exec';
-    return {
-      current_phase: currentPhase as TeamPhase | TerminalPhase,
-      max_fix_attempts: typeof parsed.max_fix_attempts === 'number' ? parsed.max_fix_attempts : 3,
-      current_fix_attempt: typeof parsed.current_fix_attempt === 'number' ? parsed.current_fix_attempt : 0,
-      transitions: Array.isArray(parsed.transitions) ? parsed.transitions : [],
-      updated_at: typeof parsed.updated_at === 'string' ? parsed.updated_at : new Date().toISOString(),
-    };
-  } catch {
-    return null;
-  }
+  const phase = await readTeamPhaseImpl(teamName, cwd, teamPhasePath);
+  return phase as TeamPhaseState | null;
 }
 
 export async function writeTeamPhase(
@@ -2321,7 +1851,7 @@ export async function writeTeamPhase(
   phaseState: TeamPhaseState,
   cwd: string,
 ): Promise<void> {
-  await writeAtomic(teamPhasePath(teamName, cwd), JSON.stringify(phaseState, null, 2));
+  await writeTeamPhaseImpl(teamName, phaseState, cwd, teamPhasePath, writeAtomic);
 }
 
 // === Config persistence (public wrapper) ===
