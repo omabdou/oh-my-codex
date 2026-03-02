@@ -10,248 +10,245 @@ triggers:
 
 # Configure OpenClaw Notifications
 
-Set up OpenClaw as a notification gateway so OMX can route session events through your own HTTP endpoint or CLI command.
+Set up OpenClaw as a notification gateway so OMX can route notification events to your OpenClaw hook endpoints (or a local command gateway).
 
-## What is OpenClaw?
+## Runtime Schema Requirement (must match OMX)
 
-OpenClaw is a self-hosted notification gateway that lets you receive OMX events however you want — HTTP webhooks to your own server, shell commands, or any integration you build. Unlike platform-specific notifiers (Discord, Slack), OpenClaw gives you full control over message routing and format.
+Always write OpenClaw config under:
+- `notifications.openclaw.enabled`
+- `notifications.openclaw.gateways`
+- `notifications.openclaw.hooks`
 
-**Two gateway modes:**
-- **HTTP Gateway** — OMX POSTs JSON events to your HTTP endpoint
-- **CLI Command Gateway** — OMX runs a shell command with event data as arguments or stdin
+Do **not** use legacy keys like `gatewayType`, `endpoint`, or top-level `command`.
 
 ## How This Skill Works
 
-This is an interactive, natural-language configuration skill. Walk the user through setup by asking questions with AskUserQuestion. Write the result to `~/.codex/.omx-config.json`.
+This is an interactive setup wizard. Ask questions with AskUserQuestion, merge changes into `~/.codex/.omx-config.json`, and then run a verification flow with explicit pass/fail diagnostics.
 
-## Step 1: Detect Existing Configuration
+## Step 1: Detect Existing OpenClaw Configuration
 
 ```bash
 CONFIG_FILE="$HOME/.codex/.omx-config.json"
 
 if [ -f "$CONFIG_FILE" ]; then
-  HAS_OPENCLAW=$(jq -r '.notifications.openclaw.enabled // false' "$CONFIG_FILE" 2>/dev/null)
-  GATEWAY_TYPE=$(jq -r '.notifications.openclaw.gatewayType // empty' "$CONFIG_FILE" 2>/dev/null)
-  ENDPOINT=$(jq -r '.notifications.openclaw.endpoint // empty' "$CONFIG_FILE" 2>/dev/null)
-  COMMAND=$(jq -r '.notifications.openclaw.command // empty' "$CONFIG_FILE" 2>/dev/null)
+  OPENCLAW_ENABLED=$(jq -r '.notifications.openclaw.enabled // false' "$CONFIG_FILE" 2>/dev/null)
+  GATEWAYS=$(jq -r '.notifications.openclaw.gateways // {} | keys | join(", ")' "$CONFIG_FILE" 2>/dev/null)
+  HOOKS=$(jq -r '.notifications.openclaw.hooks // {} | keys | join(", ")' "$CONFIG_FILE" 2>/dev/null)
 
-  if [ "$HAS_OPENCLAW" = "true" ]; then
-    echo "EXISTING_CONFIG=true"
-    echo "GATEWAY_TYPE=$GATEWAY_TYPE"
-    [ -n "$ENDPOINT" ] && echo "ENDPOINT=$ENDPOINT"
-    [ -n "$COMMAND" ] && echo "COMMAND=$COMMAND"
-  else
-    echo "EXISTING_CONFIG=false"
-  fi
+  echo "OPENCLAW_ENABLED=$OPENCLAW_ENABLED"
+  echo "GATEWAYS=${GATEWAYS:-none}"
+  echo "HOOKS=${HOOKS:-none}"
 else
   echo "NO_CONFIG_FILE"
 fi
 ```
 
-If existing config is found, show the user what's currently configured and ask if they want to update or reconfigure.
+If existing config is found, show current gateways/hooks and ask whether to update or replace.
 
-## Step 2: Choose Gateway Type
+## Step 2: Choose Gateway Mode
 
 Use AskUserQuestion:
 
-**Question:** "Which OpenClaw gateway mode do you want to use?"
+**Question:** "Which OpenClaw gateway mode do you want to configure?"
 
 **Options:**
-1. **HTTP Gateway** - OMX sends a POST request with JSON to your endpoint. Good for web servers, n8n, Zapier webhooks, or any HTTP-capable service.
-2. **CLI Command Gateway** - OMX runs a shell command you specify. Good for local scripts, custom notification tools, or anything shell-scriptable.
+1. **HTTP Gateway (Recommended)** - OMX POSTs JSON to your OpenClaw hook endpoint
+2. **CLI Command Gateway** - OMX executes a local command template
 
 ## Step 3A: HTTP Gateway Setup
 
-If user chose HTTP:
+Collect three values:
+1. Gateway name (default: `local`)
+2. Hook base URL (example: `http://127.0.0.1:18789`)
+3. OpenClaw hooks token
 
-Use AskUserQuestion:
+Build the endpoint URL as:
+- Delivery endpoint: `${BASE_URL%/}/hooks/agent`
+- Optional wake smoke endpoint: `${BASE_URL%/}/hooks/wake`
 
-**Question:** "Enter your OpenClaw HTTP endpoint URL. OMX will POST JSON event data to this URL."
+### Required validation checks
 
-The user types their URL in the "Other" field.
+Run these checks and report each result:
 
-**Validate** the URL:
-- Must start with `http://` or `https://`
-- If invalid, explain the format and ask again
+1) **Hook token present**
+```bash
+[ -n "$HOOKS_TOKEN" ] && echo "PASS token provided" || echo "FAIL token missing"
+```
 
-### Optional: Secret Header
+2) **Gateway URL format and reachability**
+```bash
+case "$BASE_URL" in
+  http://*|https://*) echo "PASS URL format" ;;
+  *) echo "FAIL URL must start with http:// or https://" ;;
+esac
 
-Use AskUserQuestion:
+curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$BASE_URL" || echo "FAIL cannot reach base URL"
+```
 
-**Question:** "Add an authorization header to secure requests? (Optional)"
+3) **Delivery endpoint probe (`/hooks/agent`)**
+```bash
+curl -sS -o /tmp/omx-openclaw-agent.json -w "HTTP %{http_code}\n" \
+  -X POST "${BASE_URL%/}/hooks/agent" \
+  -H "Authorization: Bearer $HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"OMX OpenClaw setup probe","event":"session-end","sessionId":"setup-smoke"}'
+```
 
-**Options:**
-1. **Yes, add Bearer token** - Sends `Authorization: Bearer <token>`
-2. **Yes, add custom header** - Specify header name and value
-3. **No auth header** - Open endpoint (use firewall rules or IP allowlist instead)
-
-If they want a Bearer token or custom header, collect the values.
+If probe is non-2xx or network fails, treat as setup failure and continue with diagnostics.
 
 ## Step 3B: CLI Command Gateway Setup
 
-If user chose CLI Command:
+Collect:
+- Gateway name (default: `local-command`)
+- Command template (supports `{{event}}`, `{{instruction}}`, `{{sessionId}}`, `{{projectPath}}`)
 
-Use AskUserQuestion:
-
-**Question:** "Enter the shell command OMX should run for each notification event. Use these placeholders:
-- `{event}` — event name (e.g. session-end)
-- `{session_id}` — session identifier
-- `{project}` — project name/path
-- `{message}` — formatted notification message
-
-Example: `notify-send 'OMX: {event}' '{message}'`
-Example: `~/.local/bin/my-notifier --event {event} --msg '{message}'`"
-
-The user types their command in the "Other" field.
-
-**IMPORTANT: Dual activation gate for CLI Command gateways**
-
-CLI command gateways require TWO environment variables to be set:
-- `OMX_OPENCLAW=1` — enables the OpenClaw gateway
-- `OMX_OPENCLAW_COMMAND=1` — specifically enables CLI command execution
-
-This two-gate design prevents accidental command execution when only the config file is present. Remind the user to set both in their shell profile.
-
-## Step 4: Map Events
-
-Use AskUserQuestion with multiSelect:
-
-**Question:** "Which events should be routed through OpenClaw?"
-
-**Options (multiSelect: true):**
-1. **Session end (Recommended)** - When a Codex session finishes
-2. **Input needed** - When Codex is waiting for your response
-3. **Session start** - When a new session begins
-4. **Session continuing** - When a persistent mode keeps the session alive
-
-Default selection: session-end + ask-user-question.
-
-## Step 5: Write Configuration
-
-Read the existing config, merge the OpenClaw settings, and write back:
-
+Example:
 ```bash
-CONFIG_FILE="$HOME/.codex/.omx-config.json"
-mkdir -p "$(dirname "$CONFIG_FILE")"
-
-if [ -f "$CONFIG_FILE" ]; then
-  EXISTING=$(cat "$CONFIG_FILE")
-else
-  EXISTING='{}'
-fi
+~/.local/bin/my-notifier --event {{event}} --text {{instruction}}
 ```
 
-### For HTTP Gateway:
+### Dual env gate (must be explained)
+
+CLI command gateways only run when **both** are set:
 
 ```bash
-# ENDPOINT, AUTH_HEADER_NAME, AUTH_HEADER_VALUE are collected from user
-echo "$EXISTING" | jq \
-  --arg endpoint "$ENDPOINT" \
-  --arg headerName "$AUTH_HEADER_NAME" \
-  --arg headerValue "$AUTH_HEADER_VALUE" \
-  '.notifications = (.notifications // {enabled: true}) |
-   .notifications.enabled = true |
-   .notifications.openclaw = {
-     enabled: true,
-     gatewayType: "http",
-     endpoint: $endpoint,
-     headers: (if $headerName == "" then null else {($headerName): $headerValue} end)
-   }' > "$CONFIG_FILE"
+export OMX_OPENCLAW=1
+export OMX_OPENCLAW_COMMAND=1
 ```
 
-### For CLI Command Gateway:
+If `OMX_OPENCLAW_COMMAND` is missing, command gateway dispatch is blocked by design.
+
+## Step 4: Select Hook Event Mappings
+
+Use AskUserQuestion with multiSelect.
+
+**Question:** "Which OMX events should trigger OpenClaw hooks?"
+
+Recommended defaults:
+- `session-end`
+- `ask-user-question`
+
+Optional:
+- `session-start`
+- `session-idle`
+- `stop`
+
+For each selected event, collect a short instruction template.
+
+## Step 5: Write Schema-Aligned Config
+
+Always merge into `~/.codex/.omx-config.json`.
+
+### HTTP gateway example
 
 ```bash
-# COMMAND is collected from user
-echo "$EXISTING" | jq \
-  --arg command "$COMMAND" \
+jq \
+  --arg gatewayName "$GATEWAY_NAME" \
+  --arg url "${BASE_URL%/}/hooks/agent" \
+  --arg token "$HOOKS_TOKEN" \
   '.notifications = (.notifications // {enabled: true}) |
    .notifications.enabled = true |
-   .notifications.openclaw = {
-     enabled: true,
-     gatewayType: "command",
+   .notifications.openclaw = (.notifications.openclaw // {}) |
+   .notifications.openclaw.enabled = true |
+   .notifications.openclaw.gateways = (.notifications.openclaw.gateways // {}) |
+   .notifications.openclaw.gateways[$gatewayName] = {
+     type: "http",
+     url: $url,
+     headers: {"Authorization": ("Bearer " + $token)}
+   }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+```
+
+### Command gateway example
+
+```bash
+jq \
+  --arg gatewayName "$GATEWAY_NAME" \
+  --arg command "$COMMAND_TEMPLATE" \
+  '.notifications = (.notifications // {enabled: true}) |
+   .notifications.enabled = true |
+   .notifications.openclaw = (.notifications.openclaw // {}) |
+   .notifications.openclaw.enabled = true |
+   .notifications.openclaw.gateways = (.notifications.openclaw.gateways // {}) |
+   .notifications.openclaw.gateways[$gatewayName] = {
+     type: "command",
      command: $command
-   }' > "$CONFIG_FILE"
+   }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 ```
 
-### Add event-specific config if user didn't select all events:
+### Hook mapping example
 
 ```bash
-# Example: disable session-start if not selected
-echo "$(cat "$CONFIG_FILE")" | jq \
-  '.notifications.events = (.notifications.events // {}) |
-   .notifications.events["session-start"] = {enabled: false}' > "$CONFIG_FILE"
+jq \
+  --arg gatewayName "$GATEWAY_NAME" \
+  '.notifications.openclaw.hooks = (.notifications.openclaw.hooks // {}) |
+   .notifications.openclaw.hooks["session-end"] = {
+     enabled: true,
+     gateway: $gatewayName,
+     instruction: "OMX task completed for {{projectPath}}"
+   } |
+   .notifications.openclaw.hooks["ask-user-question"] = {
+     enabled: true,
+     gateway: $gatewayName,
+     instruction: "OMX needs input: {{question}}"
+   }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 ```
 
 ## Step 6: Explain Activation Gates
 
-Regardless of gateway type, explain the activation model:
-
-```
-OpenClaw Activation Gates
-─────────────────────────
-OpenClaw requires environment variables to be set before it activates.
-This prevents accidental notifications in shared or CI environments.
-
-For HTTP Gateway:
-  export OMX_OPENCLAW=1
-
-For CLI Command Gateway (requires both):
-  export OMX_OPENCLAW=1
-  export OMX_OPENCLAW_COMMAND=1
-
-Add these to your ~/.zshrc or ~/.bashrc.
-```
-
-## Step 7: Test the Configuration
-
-After writing config, offer to test:
-
-Use AskUserQuestion:
-
-**Question:** "Send a test notification through OpenClaw to verify the setup?"
-
-**Options:**
-1. **Yes, test now (Recommended)** - Run a test dispatch
-2. **No, I'll test later** - Skip testing
-
-### If testing HTTP Gateway:
+Show this exactly:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" \
+# Required for OpenClaw integration
+export OMX_OPENCLAW=1
+
+# Required in addition for command gateways
+export OMX_OPENCLAW_COMMAND=1
+```
+
+## Step 7: Verification Flow (required)
+
+Run both checks for HTTP gateways:
+
+### A) Wake smoke test (`/hooks/wake`)
+
+```bash
+curl -sS -X POST "${BASE_URL%/}/hooks/wake" \
+  -H "Authorization: Bearer $HOOKS_TOKEN" \
   -H "Content-Type: application/json" \
-  ${AUTH_HEADER_NAME:+-H "$AUTH_HEADER_NAME: $AUTH_HEADER_VALUE"} \
-  -d '{"event":"test","message":"OMX OpenClaw test notification","session_id":"test"}' \
-  "$ENDPOINT"
+  -d '{"text":"OMX wake smoke test","mode":"now"}'
 ```
 
-### If testing CLI Command Gateway:
+Expected pass signal: JSON includes `"ok":true`.
 
-Replace placeholders in the command with test values and run it.
+### B) Delivery verification (`/hooks/agent`) — not wake-only
 
-Report success or failure. If it fails, help debug (check URL accessibility, command path, permissions).
-
-## Step 8: Confirm
-
-Display the final configuration summary:
-
+```bash
+curl -sS -o /tmp/omx-openclaw-delivery.json -w "HTTP %{http_code}\n" \
+  -X POST "${BASE_URL%/}/hooks/agent" \
+  -H "Authorization: Bearer $HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"OMX delivery verification","event":"session-end","sessionId":"verify-setup"}'
 ```
-OpenClaw Gateway Configured!
 
-  Type:     HTTP / CLI Command
-  Endpoint: https://your-server/omx-hook  (HTTP only)
-  Command:  notify-send 'OMX' '{message}'  (CLI only)
-  Events:   session-end, ask-user-question
+Expected pass signal: HTTP 2xx and response body confirms acceptance.
 
-Config saved to: ~/.codex/.omx-config.json
+## Step 8: Pass/Fail Diagnostics Guidance
 
-Activation (add to ~/.zshrc or ~/.bashrc):
-  export OMX_OPENCLAW=1
-  export OMX_OPENCLAW_COMMAND=1   # CLI Command gateways only
+If verification fails, guide with this checklist:
+- **401/403** → token missing/invalid; rotate token and update `Authorization` header.
+- **404** → wrong path; verify `/hooks/agent` and `/hooks/wake` are enabled by OpenClaw hooks config.
+- **5xx** → OpenClaw gateway runtime issue; check gateway logs and retry.
+- **Timeout / connection refused** → gateway URL unreachable; confirm host/port and local firewall.
+- **Command gateway disabled** → set both `OMX_OPENCLAW=1` and `OMX_OPENCLAW_COMMAND=1`.
 
-To reconfigure: /configure-openclaw
-To configure other platforms: /configure-notifications
-```
+## Step 9: Final Summary
+
+Show:
+- gateway mode + gateway name
+- mapped events
+- whether smoke test passed
+- whether `/hooks/agent` delivery test passed
+- exact env vars user still needs to export in shell profile
 
 ## Environment Variable Reference
 
@@ -259,9 +256,9 @@ To configure other platforms: /configure-notifications
 # Required for all OpenClaw gateways
 export OMX_OPENCLAW=1
 
-# Required additionally for CLI Command gateways
+# Required additionally for CLI command gateways
 export OMX_OPENCLAW_COMMAND=1
 
-# HTTP gateway: override endpoint URL
-export OMX_OPENCLAW_URL="https://your-server/omx-hook"
+# Optional debug logs
+export OMX_OPENCLAW_DEBUG=1
 ```

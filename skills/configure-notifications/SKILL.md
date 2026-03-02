@@ -89,7 +89,7 @@ Then use AskUserQuestion:
 1. **Discord** - Webhook or bot notifications to Discord channels
 2. **Telegram** - Bot notifications to personal or group chats
 3. **Slack** - Incoming webhook notifications to Slack channels
-4. **OpenClaw** - Self-hosted HTTP or CLI command gateway
+4. **OpenClaw** - Self-hosted gateway (`notifications.openclaw.gateways + hooks`) with /hooks/agent delivery verification
 5. **Cross-cutting settings** - Verbosity, idle cooldown, profiles, reply listener
 6. **Disable all notifications** - Turn off all notification dispatching
 

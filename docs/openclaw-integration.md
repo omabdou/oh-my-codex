@@ -6,26 +6,18 @@
 
 ## Overview
 
-[OpenClaw](https://docs.openclaw.ai) is an always-on AI agent gateway that connects to Telegram, Discord, Slack, and more. When you run OMX sessions from OpenClaw, you want OMX to **notify OpenClaw when tasks complete** — so the gateway can relay results to you on your phone, in Slack, wherever you are.
+OMX supports native OpenClaw notification delivery through `notifications.openclaw` in `~/.codex/.omx-config.json`.
 
-OMX has native OpenClaw support via the `notifications.openclaw` config block.
-
-## TL;DR
-
-```bash
-# 1. Set env var (add to ~/.zshenv or ~/.bashrc)
-export OMX_OPENCLAW=1
-
-# 2. Write config (see full example below)
-```
-
-That's it. No wrapper scripts needed.
+This guide uses the runtime schema that OMX actually reads:
+- `notifications.openclaw.enabled`
+- `notifications.openclaw.gateways`
+- `notifications.openclaw.hooks`
 
 ## Prerequisites
 
-### OpenClaw Hooks
+### 1) OpenClaw hooks enabled
 
-Enable hooks in your OpenClaw config (`~/.openclaw/openclaw.json`):
+In `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -37,30 +29,23 @@ Enable hooks in your OpenClaw config (`~/.openclaw/openclaw.json`):
 }
 ```
 
-The wake endpoint will be available at `POST http://127.0.0.1:<port>/hooks/wake`.
-
-Test it:
+### 2) Environment gate enabled
 
 ```bash
-curl -s -X POST http://127.0.0.1:18789/hooks/wake \
-  -H "Authorization: Bearer YOUR_HOOKS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "hello from OMX", "mode": "now"}'
-# Expected: {"ok":true,"mode":"now"}
+export OMX_OPENCLAW=1
+# Optional debug logging
+export OMX_OPENCLAW_DEBUG=1
 ```
 
-### Environment Variables
-
-Add to your shell profile (`~/.zshenv`, `~/.bashrc`, etc.):
+For command gateways, OMX also requires:
 
 ```bash
-export OMX_OPENCLAW=1           # Activates OpenClaw integration
-export OMX_OPENCLAW_DEBUG=1     # Optional: debug logging to stderr
+export OMX_OPENCLAW_COMMAND=1
 ```
 
-## Configuration
+This is an intentional dual env gate for command execution safety.
 
-### Config File (`~/.codex/.omx-config.json`)
+## Config Example (schema-aligned)
 
 ```json
 {
@@ -77,7 +62,7 @@ export OMX_OPENCLAW_DEBUG=1     # Optional: debug logging to stderr
       "gateways": {
         "local": {
           "type": "http",
-          "url": "http://127.0.0.1:18789/hooks/wake",
+          "url": "http://127.0.0.1:18789/hooks/agent",
           "headers": {
             "Authorization": "Bearer YOUR_HOOKS_TOKEN"
           }
@@ -110,33 +95,66 @@ export OMX_OPENCLAW_DEBUG=1     # Optional: debug logging to stderr
 }
 ```
 
-> **Note:** Replace `YOUR_HOOKS_TOKEN` with your actual OpenClaw hooks token.
+> Replace `YOUR_HOOKS_TOKEN` with your actual OpenClaw hooks token.
 
-## Verification
+## Verification (required)
 
-Check the debug output when running OMX:
+Use both tests below. Do not rely on wake-only validation.
+
+### A) Wake smoke test (`/hooks/wake`)
 
 ```bash
-OMX_OPENCLAW=1 OMX_OPENCLAW_DEBUG=1 \
-omx --yolo "your task here"
-# stderr will show: [openclaw] wake session-end -> local: ok
+curl -sS -X POST http://127.0.0.1:18789/hooks/wake \
+  -H "Authorization: Bearer YOUR_HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"hello from OMX","mode":"now"}'
 ```
 
-## Template Variables
+Expected pass signal:
+- JSON response includes `"ok":true`
 
-These variables are available in hook `instruction` templates:
+### B) Delivery verification (`/hooks/agent`)
 
-| Variable | Description |
-|---|---|
-| `{{sessionId}}` | OMX session identifier |
-| `{{projectName}}` | Basename of project directory |
-| `{{projectPath}}` | Full project path |
-| `{{question}}` | Question text (ask-user-question event) |
-| `{{contextSummary}}` | Context summary (session-end) |
-| `{{timestamp}}` | ISO timestamp |
-| `{{event}}` | Hook event name |
-| `{{tmuxSession}}` | Tmux session name |
-| `{{tmuxTail}}` | Last N lines from tmux pane |
+```bash
+curl -sS -o /tmp/omx-openclaw-agent-check.json -w "HTTP %{http_code}\n" \
+  -X POST http://127.0.0.1:18789/hooks/agent \
+  -H "Authorization: Bearer YOUR_HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"OMX delivery verification","event":"session-end","sessionId":"manual-check"}'
+```
+
+Expected pass signal:
+- HTTP 2xx
+- Response body indicates acceptance/delivery handling
+
+## Preflight Checks
+
+Before running OMX:
+
+```bash
+# 1) token present
+test -n "$YOUR_HOOKS_TOKEN" && echo "token ok" || echo "token missing"
+
+# 2) URL format + reachability
+curl -sS -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:18789 || echo "gateway unreachable"
+
+# 3) OMX env gate
+test "$OMX_OPENCLAW" = "1" && echo "OMX_OPENCLAW=1" || echo "missing OMX_OPENCLAW=1"
+```
+
+For command gateway configs also run:
+
+```bash
+test "$OMX_OPENCLAW_COMMAND" = "1" && echo "OMX_OPENCLAW_COMMAND=1" || echo "missing OMX_OPENCLAW_COMMAND=1"
+```
+
+## Pass/Fail Diagnostics
+
+- **401/403**: hook token invalid or missing in `Authorization` header.
+- **404**: wrong endpoint path; verify OpenClaw hooks `path` and use `/hooks/agent` + `/hooks/wake`.
+- **5xx**: OpenClaw server-side issue; inspect OpenClaw logs.
+- **Connection refused / timeout**: gateway URL unreachable; verify host/port/process.
+- **Command gateway not firing**: confirm both `OMX_OPENCLAW=1` and `OMX_OPENCLAW_COMMAND=1`.
 
 ## Hook Events
 
