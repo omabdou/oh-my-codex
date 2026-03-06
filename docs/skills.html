@@ -22,11 +22,11 @@
       <h1>Skills Reference</h1>
       <p class="muted">Workflow, shortcut, utility, and internal-only skills.</p>
       <p>
-        The public review/analysis surface is task-shaped: use <code>$analyze</code> for investigation,
-        <code>$code-review</code> for umbrella review, and <code>/prompts:critic</code> when you want direct plan/design
-        critique. This mixed invocation model is intentional: <code>$analyze</code> and <code>$code-review</code> are
-        skill routers, while <code>/prompts:critic</code> remains a direct prompt. <code>$security-review</code> and
-        <code>$review</code> stay available only as compatibility/deprecated shims for older instructions.
+        The public review/analysis surface is centered on <code>$analyze</code>, <code>$code-review</code>, and
+        <code>/prompts:critic</code>. This mixed invocation model is intentional: <code>$analyze</code> and
+        <code>$code-review</code> are public skill routers, while <code>/prompts:critic</code> remains a first-class
+        public critique agent. <code>$security-review</code> and <code>$review</code> stay available only as
+        compatibility/deprecated shims for older instructions.
       </p>
 
       <h2>Public Review/Analysis Entry Points</h2>
@@ -35,7 +35,7 @@
         <tbody>
           <tr><td><code>$analyze</code></td><td>skill</td><td>Task-intent investigation entry that routes to <code>/prompts:architect</code> or <code>/prompts:debugger</code>.</td></tr>
           <tr><td><code>$code-review</code></td><td>skill</td><td>Public umbrella review entry with escalation to <code>/prompts:security-reviewer</code> when trust-boundary or vulnerability work is needed.</td></tr>
-          <tr><td><code>/prompts:critic</code></td><td>prompt</td><td>Direct critique entry for plans and designs when critique itself is the task.</td></tr>
+          <tr><td><code>/prompts:critic</code></td><td>prompt</td><td>First-class public critique agent for plans and designs when critique itself is the task.</td></tr>
         </tbody>
       </table>
 
@@ -65,7 +65,7 @@
           <tr><td><code>$build-fix</code></td><td><code>/prompts:build-fixer</code></td><td>Build, type, and toolchain error resolution.</td></tr>
           <tr><td><code>$code-review</code></td><td><code>/prompts:code-reviewer</code></td><td>Umbrella code review across quality, API, performance, and style concerns.</td></tr>
           <tr><td><code>$security-review</code></td><td><code>/prompts:security-reviewer</code></td><td>Compatibility/deprecated shim for dedicated security audits; prefer <code>$code-review</code> for new general review requests.</td></tr>
-          <tr><td><code>$review</code></td><td><code>/plan --review</code></td><td>Compatibility/deprecated shim for older critic-style plan review flows.</td></tr>
+          <tr><td><code>$review</code></td><td><code>/plan --review</code></td><td>Deprecated public term retained only for older critic-style plan review flows.</td></tr>
           <tr><td><code>$frontend-ui-ux</code></td><td><code>/prompts:designer</code></td><td>UI component and UX-focused work.</td></tr>
           <tr><td><code>$git-master</code></td><td><code>/prompts:git-master</code></td><td>Git hygiene, commit strategy, and history cleanup.</td></tr>
         </tbody>

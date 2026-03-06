@@ -361,15 +361,16 @@ Notes:
 - Prompts: `prompts/*.md` (installed to `~/.codex/prompts/` for `user`, `./.codex/prompts/` for `project`)
 - Skills: `skills/*/SKILL.md` (installed to `~/.agents/skills/` for `user`, `./.agents/skills/` for `project`)
 
-Public review/analysis entry points use a mixed surface by design:
+Public review/analysis is centered on a mixed public surface by design:
 - Skills: `$analyze`, `$code-review`
-- Prompt: `/prompts:critic`
+- First-class critique agent: `/prompts:critic`
 - Internal experts still exist behind the scenes: `architect`, `debugger`, `code-reviewer`, `security-reviewer`
 - Compatibility/deprecated shims: `$security-review`, `$review`
 
 Examples:
-- Agents: `architect`, `planner`, `executor`, `debugger`, `verifier`, `critic`
-- Skills: `analyze`, `code-review`, `autopilot`, `plan`, `team`, `ralph`, `ultrawork`, `cancel`
+- Public review/analysis: `analyze`, `code-review`, `critic`
+- Other prompts/agents: `planner`, `executor`, `verifier`
+- Other skills: `autopilot`, `plan`, `team`, `ralph`, `ultrawork`, `cancel`
 
 ### Notification Setup Skill (`$configure-notifications`)
 

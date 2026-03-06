@@ -44,7 +44,7 @@ describe('catalog public-surface contract', () => {
     assert.match(skillsDoc, /\$analyze/);
     assert.match(skillsDoc, /\$code-review/);
     assert.match(skillsDoc, /\/prompts:critic/);
-    assert.match(skillsDoc, /\$security-review<\/code> and\s*<code>\$review<\/code> stay available only as compatibility\/deprecated shims/i);
+    assert.match(skillsDoc, /\$security-review<\/code>[\s\S]*?<code>\$review<\/code> stay available only as[\s\S]*?compatibility\/deprecated shims/i);
   });
 
   it('keeps internal experts out of the primary docs/agents.html surface', async () => {

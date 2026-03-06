@@ -23,7 +23,7 @@
       <p class="muted">Public task-intent surface plus the internal expert prompt catalog.</p>
       <p>
         The primary review/analysis surface is intentionally task-shaped: use <code>$analyze</code> for investigation,
-        <code>$code-review</code> for umbrella review, and <code>/prompts:critic</code> for direct plan/design critique.
+        <code>$code-review</code> for umbrella review, and <code>/prompts:critic</code> as a first-class public critique agent.
         This is a mixed invocation model by design: <code>$analyze</code> and <code>$code-review</code> are public skill
         routers, while the prompt catalog below exposes the internal experts they route into.
       </p>
@@ -34,7 +34,7 @@
         <tbody>
           <tr><td><code>$analyze</code></td><td>skill</td><td><code>/prompts:architect</code> or <code>/prompts:debugger</code></td><td>Task-intent investigation entry that chooses structural diagnosis vs failure isolation.</td></tr>
           <tr><td><code>$code-review</code></td><td>skill</td><td><code>/prompts:code-reviewer</code> with <code>/prompts:security-reviewer</code> escalation</td><td>Public umbrella review entry for quality, API, performance, style, and security-sensitive follow-up.</td></tr>
-          <tr><td><code>/prompts:critic</code></td><td>prompt</td><td>direct</td><td>Direct critique entry for plans and designs when critique itself is the task.</td></tr>
+          <tr><td><code>/prompts:critic</code></td><td>prompt</td><td>direct</td><td>First-class public critique agent for plans and designs when critique itself is the task.</td></tr>
         </tbody>
       </table>
 

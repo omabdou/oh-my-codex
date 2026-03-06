@@ -102,9 +102,9 @@ Use `/prompts:name` to invoke specialized agents (Codex CLI custom prompt syntax
 Public review/analysis surface (mixed by design):
 - `$analyze`: task-intent investigation entry that routes into `architect` or `debugger`
 - `$code-review`: public umbrella review entry that routes into `code-reviewer` with `security-reviewer` escalation when needed
-- `/prompts:critic`: direct critique entry for plans/designs when critique itself is the task
+- `/prompts:critic`: first-class public critique agent for plans/designs when critique itself is the task
 
-This lane intentionally mixes skills and prompts: `analyze` and `code-review` are public skill routers, while `critic` remains a prompt because it is already the user-facing critique capability.
+This lane intentionally mixes skills and prompts: `analyze` and `code-review` are public skill routers, while `critic` remains a first-class public prompt because critique itself is the user-facing capability.
 
 Build/Execution + Internal Analysis Experts:
 - `/prompts:explore`: Fast codebase search, file/symbol mapping
@@ -212,8 +212,8 @@ Shortcut Skills:
 - `tdd` -> test-engineer: Test-driven development workflow
 - `build-fix` -> build-fixer: Build error resolution
 - `code-review` -> code-reviewer: Umbrella code review across quality, API, performance, and style concerns
-- `security-review` -> security-reviewer: Compatibility/deprecated shim for dedicated security audits; prefer `code-review` unless the request is explicitly security-only
-- `review` -> plan --review: Compatibility/deprecated shim for older critic-style plan reviews
+- `security-review` -> security-reviewer: Specialist compatibility/deprecated shim for dedicated security audits; prefer `code-review` unless the request is explicitly security-only
+- `review` -> plan --review: Deprecated public term for older critic-style plan reviews
 - `frontend-ui-ux` -> designer: UI component and styling work
 - `git-master` -> git-master: Git commit and history management
 
