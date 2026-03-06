@@ -97,7 +97,7 @@
       "category": "shortcut",
       "status": "deprecated",
       "canonical": "code-review",
-      "surface": "compatibility_alias"
+      "surface": "public_compatibility"
     },
     {
       "name": "visual-verdict",
@@ -128,7 +128,7 @@
       "category": "shortcut",
       "status": "deprecated",
       "canonical": "plan --review",
-      "surface": "compatibility_alias"
+      "surface": "public_compatibility"
     },
     {
       "name": "ask-claude",
@@ -275,21 +275,21 @@
       "category": "review",
       "status": "merged",
       "canonical": "code-reviewer",
-      "surface": "compatibility_alias"
+      "surface": "hidden_compatibility"
     },
     {
       "name": "quality-reviewer",
       "category": "review",
       "status": "merged",
       "canonical": "code-reviewer",
-      "surface": "compatibility_alias"
+      "surface": "hidden_compatibility"
     },
     {
       "name": "api-reviewer",
       "category": "review",
       "status": "merged",
       "canonical": "code-reviewer",
-      "surface": "compatibility_alias"
+      "surface": "hidden_compatibility"
     },
     {
       "name": "security-reviewer",
@@ -302,7 +302,7 @@
       "category": "review",
       "status": "merged",
       "canonical": "code-reviewer",
-      "surface": "compatibility_alias"
+      "surface": "hidden_compatibility"
     },
     {
       "name": "code-reviewer",

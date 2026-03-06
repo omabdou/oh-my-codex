@@ -121,7 +121,7 @@
       "name": "security-review",
       "category": "shortcut",
       "status": "deprecated",
-      "surface": "compatibility_alias",
+      "surface": "public_compatibility",
       "canonical": "code-review",
       "core": false,
       "internalRequired": false
@@ -162,7 +162,7 @@
       "name": "review",
       "category": "shortcut",
       "status": "deprecated",
-      "surface": "compatibility_alias",
+      "surface": "public_compatibility",
       "canonical": "plan --review",
       "core": false,
       "internalRequired": false
@@ -334,21 +334,21 @@
       "name": "style-reviewer",
       "category": "review",
       "status": "merged",
-      "surface": "compatibility_alias",
+      "surface": "hidden_compatibility",
       "canonical": "code-reviewer"
     },
     {
       "name": "quality-reviewer",
       "category": "review",
       "status": "merged",
-      "surface": "compatibility_alias",
+      "surface": "hidden_compatibility",
       "canonical": "code-reviewer"
     },
     {
       "name": "api-reviewer",
       "category": "review",
       "status": "merged",
-      "surface": "compatibility_alias",
+      "surface": "hidden_compatibility",
       "canonical": "code-reviewer"
     },
     {
@@ -361,7 +361,7 @@
       "name": "performance-reviewer",
       "category": "review",
       "status": "merged",
-      "surface": "compatibility_alias",
+      "surface": "hidden_compatibility",
       "canonical": "code-reviewer"
     },
     {

@@ -1,7 +1,7 @@
 export type CatalogSkillCategory = 'execution' | 'planning' | 'shortcut' | 'utility';
 export type CatalogAgentCategory = 'build' | 'review' | 'domain' | 'product' | 'coordination';
 export type CatalogEntryStatus = 'active' | 'alias' | 'merged' | 'deprecated' | 'internal';
-export type CatalogSurface = 'public_task_intent' | 'public_agent' | 'internal_expert' | 'compatibility_alias';
+export type CatalogSurface = 'public_task_intent' | 'public_agent' | 'internal_expert' | 'public_compatibility' | 'hidden_compatibility';
 
 export interface CatalogSkillEntry {
   name: string;
@@ -31,7 +31,7 @@ export interface CatalogManifest {
 const SKILL_CATEGORIES = new Set<CatalogSkillCategory>(['execution', 'planning', 'shortcut', 'utility']);
 const AGENT_CATEGORIES = new Set<CatalogAgentCategory>(['build', 'review', 'domain', 'product', 'coordination']);
 const ENTRY_STATUSES = new Set<CatalogEntryStatus>(['active', 'alias', 'merged', 'deprecated', 'internal']);
-const ENTRY_SURFACES = new Set<CatalogSurface>(['public_task_intent', 'public_agent', 'internal_expert', 'compatibility_alias']);
+const ENTRY_SURFACES = new Set<CatalogSurface>(['public_task_intent', 'public_agent', 'internal_expert', 'public_compatibility', 'hidden_compatibility']);
 const REQUIRED_CORE_SKILLS = new Set(['ralplan', 'team', 'ralph', 'ultrawork', 'autopilot']);
 
 function isObject(value: unknown): value is Record<string, unknown> {

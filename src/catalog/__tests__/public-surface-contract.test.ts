@@ -22,10 +22,10 @@ describe('catalog public-surface contract', () => {
     assert.equal(codeReview?.status, 'active');
     assert.equal(codeReview?.surface, 'public_task_intent');
     assert.equal(securityReview?.status, 'deprecated');
-    assert.equal(securityReview?.surface, 'compatibility_alias');
+    assert.equal(securityReview?.surface, 'public_compatibility');
     assert.equal(securityReview?.canonical, 'code-review');
     assert.equal(review?.status, 'deprecated');
-    assert.equal(review?.surface, 'compatibility_alias');
+    assert.equal(review?.surface, 'public_compatibility');
     assert.equal(review?.canonical, 'plan --review');
 
     const architect = manifest.agents.find((entry) => entry.name === 'architect');
@@ -53,6 +53,16 @@ describe('catalog public-surface contract', () => {
     const analyze = broken.skills.find((entry: { name: string }) => entry.name === 'analyze');
     analyze.surface = 'totally_invalid';
     assert.throws(() => schema.validateCatalogManifest(broken), /skills\[\d+\]\.surface/);
+  });
+
+
+
+  it('marks reviewer-family specialist aliases as hidden compatibility rather than public compatibility', () => {
+    const manifest = readCatalogManifest();
+    for (const name of ['style-reviewer', 'quality-reviewer', 'api-reviewer', 'performance-reviewer']) {
+      const entry = manifest.agents.find((agent) => agent.name === name);
+      assert.equal(entry?.surface, 'hidden_compatibility');
+    }
   });
 
   it('documents the three-entry public review/analysis surface in docs/skills.html', async () => {
