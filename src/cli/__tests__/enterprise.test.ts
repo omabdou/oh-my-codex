@@ -242,6 +242,41 @@ describe('enterpriseCommand', () => {
     }
   });
 
+
+  it('cascades division-lead shutdown through the CLI', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-enterprise-cli-'));
+    const previousCwd = process.cwd();
+    const previousTmux = process.env.TMUX;
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(cwd);
+      process.env.TMUX = 'leader-session';
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+      await enterpriseCommand(['issue', '590']);
+
+      const tmuxAdapter = await import('../../enterprise/tmux-adapter.js');
+      mock.method(tmuxAdapter.enterpriseTmuxAdapter, 'isTmuxAvailable', async () => true);
+      mock.method(tmuxAdapter.enterpriseTmuxAdapter, 'createTmuxSession', async () => ({
+        name: 'leader:1', workerCount: 1, cwd, workerPaneIds: ['%101'], leaderPaneId: '%100', hudPaneId: null, resizeHookName: null, resizeHookTarget: null,
+      }));
+      mock.method(tmuxAdapter.enterpriseTmuxAdapter, 'buildWorkerStartupCommand', async (_team: string, idx: number) => `codex --worker ${idx}`);
+      mock.method(tmuxAdapter.enterpriseTmuxAdapter, 'spawnPane', async () => '%102');
+      mock.method(tmuxAdapter.enterpriseTmuxAdapter, 'killPane', async () => {});
+      await enterpriseCommand(['live-start']);
+
+      logs.length = 0;
+      await enterpriseCommand(['shutdown-node', 'division-1']);
+      assert.ok(logs.some((line) => line.includes('Enterprise live worker shutdown complete: division-1')));
+    } finally {
+      mock.restoreAll();
+      process.chdir(previousCwd);
+      console.log = originalLog;
+      if (typeof previousTmux === 'string') process.env.TMUX = previousTmux; else delete process.env.TMUX;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('sends mailbox messages and supports acknowledgement', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-enterprise-cli-'));
     const previousCwd = process.cwd();

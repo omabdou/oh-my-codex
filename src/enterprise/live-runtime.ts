@@ -266,20 +266,27 @@ export async function shutdownEnterpriseLiveNode(nodeId: string, cwd: string = p
   const enterprise = await readEnterpriseRuntime(projectRoot);
   const live = await readEnterpriseLiveRuntime(projectRoot);
   if (!enterprise || !live) throw new Error('Enterprise live runtime has not been started.');
-  const worker = live.workers.find((entry) => entry.nodeId === nodeId);
-  if (!worker) throw new Error(`Enterprise live worker not found: ${nodeId}`);
+  const target = live.workers.find((entry) => entry.nodeId === nodeId);
+  if (!target) throw new Error(`Enterprise live worker not found: ${nodeId}`);
+
+  const workersToShutdown = live.workers.filter((entry) => (
+    entry.nodeId === nodeId || (target.role === 'division_lead' && entry.ownerLeadId === nodeId)
+  ));
 
   await appendEnterpriseEvent(projectRoot, {
     type: 'shutdown_requested',
     nodeId,
     summary: `Enterprise live worker shutdown requested for ${nodeId}`,
     createdAt: new Date().toISOString(),
-    payload: { paneId: worker.paneId },
+    payload: { paneIds: workersToShutdown.map((entry) => entry.paneId) },
   });
 
-  await enterpriseTmuxAdapter.killPane(worker.paneId);
+  for (const worker of workersToShutdown) {
+    await enterpriseTmuxAdapter.killPane(worker.paneId);
+  }
 
-  const remainingWorkers = live.workers.filter((entry) => entry.nodeId !== nodeId);
+  const removedIds = new Set(workersToShutdown.map((entry) => entry.nodeId));
+  const remainingWorkers = live.workers.filter((entry) => !removedIds.has(entry.nodeId));
   const updatedLive: EnterpriseLiveRuntimeSnapshot = {
     ...live,
     workerPaneIds: remainingWorkers.map((entry) => entry.paneId),
@@ -297,6 +304,7 @@ export async function shutdownEnterpriseLiveNode(nodeId: string, cwd: string = p
     nodeId,
     summary: `Enterprise live worker shutdown completed for ${nodeId}`,
     createdAt: updatedLive.updated_at,
+    payload: { removedNodeIds: [...removedIds] },
   });
   return updatedLive;
 }
