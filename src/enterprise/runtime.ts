@@ -6,10 +6,13 @@ import { buildEnterpriseShutdownPlan } from './shutdown.js';
 import { defaultEnterprisePolicy, normalizeEnterprisePolicy } from './policy.js';
 import { addDivisionLead, addSubordinate, createEnterpriseTopology, type AddEnterpriseNodeInput } from './topology.js';
 import { buildEnterpriseMonitorSnapshot, projectChairmanSummary, summarizeDivisionLead } from './summary.js';
+import { applyMailboxRoutingToDivisionSummaries } from './routing.js';
 import {
   appendEnterpriseEvent,
   createEnterpriseAssignment,
   createEnterpriseEscalation,
+  listEnterpriseMailboxMessages,
+  listEnterpriseSubordinateRecords,
   persistEnterpriseRecords,
   sendEnterpriseMailboxMessage,
   type EnterpriseAssignmentRecord,
@@ -100,7 +103,7 @@ function buildSubordinateSeeds(divisions: EnterpriseDivisionSeed[], subordinates
   }));
 }
 
-function buildSnapshot(task: string, topology: EnterpriseTopology, executionUpdates: EnterpriseExecutionUpdate[]): EnterpriseRuntimeSnapshot {
+async function buildSnapshot(projectRoot: string, task: string, topology: EnterpriseTopology, executionUpdates: EnterpriseExecutionUpdate[]): Promise<EnterpriseRuntimeSnapshot> {
   const subordinateReports = executionUpdates
     .filter((update): update is EnterpriseExecutionUpdate & { status: 'completed' | 'blocked' | 'failed' } => {
       const node = topology.nodes[update.nodeId];
@@ -121,9 +124,13 @@ function buildSnapshot(task: string, topology: EnterpriseTopology, executionUpda
       };
     });
 
-  const divisionSummaries = Object.values(topology.nodes)
+  const baseDivisionSummaries = Object.values(topology.nodes)
     .filter((node) => node.role === 'division_lead')
     .map((lead) => summarizeDivisionLead(topology, lead.id, subordinateReports.filter((report) => report.leadId === lead.id)));
+
+  const mailboxMessages = await listEnterpriseMailboxMessages(projectRoot).catch(() => []);
+  const subordinateRecords = await listEnterpriseSubordinateRecords(projectRoot).catch(() => []);
+  const divisionSummaries = applyMailboxRoutingToDivisionSummaries(baseDivisionSummaries, mailboxMessages, subordinateRecords);
 
   const chairmanSummary = projectChairmanSummary(topology, divisionSummaries);
   const monitor = buildEnterpriseMonitorSnapshot(topology, executionUpdates);
@@ -249,7 +256,7 @@ export async function startEnterpriseRuntime(
       summary: `Pending subordinate scope: ${node.scope}`,
     }));
 
-  const snapshot = buildSnapshot(task, topology, executionUpdates);
+  const snapshot = await buildSnapshot(projectRoot, task, topology, executionUpdates);
   const handle = await persistHandle(projectRoot, snapshot, {
     task_description: task,
     tree_depth: topologyCounts(topology).maxDepthUsed,
@@ -281,7 +288,7 @@ export async function refreshEnterpriseRuntime(cwd: string = process.cwd()): Pro
   const projectRoot = resolve(cwd);
   const handle = await readEnterpriseRuntime(projectRoot);
   if (!handle) throw new Error('Enterprise mode has not been started.');
-  const snapshot = buildSnapshot(handle.snapshot.task, handle.snapshot.topology, handle.snapshot.executionUpdates);
+  const snapshot = await buildSnapshot(projectRoot, handle.snapshot.task, handle.snapshot.topology, handle.snapshot.executionUpdates);
   return persistHandle(projectRoot, snapshot);
 }
 
@@ -300,7 +307,7 @@ export async function applyEnterpriseExecutionUpdates(
     byNodeId.set(update.nodeId, update);
   }
   const mergedUpdates = [...byNodeId.values()];
-  const snapshot = buildSnapshot(handle.snapshot.task, handle.snapshot.topology, mergedUpdates);
+  const snapshot = await buildSnapshot(projectRoot, handle.snapshot.task, handle.snapshot.topology, mergedUpdates);
   const nextHandle = await persistHandle(projectRoot, snapshot);
 
   for (const update of updates) {
@@ -361,7 +368,7 @@ export async function assignEnterpriseSubordinate(
       summary: `Pending subordinate scope: ${scope}`,
     },
   ];
-  const snapshot = buildSnapshot(handle.snapshot.task, nextTopology, nextUpdates);
+  const snapshot = await buildSnapshot(projectRoot, handle.snapshot.task, nextTopology, nextUpdates);
   const nextHandle = await persistHandle(projectRoot, snapshot);
   const assignment = await createEnterpriseAssignment(projectRoot, {
     nodeId: subordinateId,

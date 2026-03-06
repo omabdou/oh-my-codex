@@ -275,6 +275,29 @@ export async function markEnterpriseMailboxDelivered(cwd: string, nodeId: string
   return true;
 }
 
+
+export async function listEnterpriseSubordinateRecords(cwd: string): Promise<EnterpriseSubordinateRecord[]> {
+  const ids = await listEnterpriseSubordinateRecordIds(cwd);
+  const records = await Promise.all(ids.map((id) => readEnterpriseSubordinateRecord(cwd, id)));
+  return records.filter((record): record is EnterpriseSubordinateRecord => record !== null);
+}
+
+export async function listEnterpriseMailboxes(cwd: string): Promise<EnterpriseMailbox[]> {
+  const dir = mailboxDir(cwd);
+  if (!existsSync(dir)) return [];
+  const files = await readdir(dir);
+  const mailboxes = await Promise.all(files.filter((file) => file.endsWith('.json')).map(async (file) => {
+    const raw = await readFile(join(dir, file), 'utf-8');
+    return JSON.parse(raw) as EnterpriseMailbox;
+  }));
+  return mailboxes.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+}
+
+export async function listEnterpriseMailboxMessages(cwd: string): Promise<EnterpriseMailboxMessage[]> {
+  const mailboxes = await listEnterpriseMailboxes(cwd);
+  return mailboxes.flatMap((mailbox) => mailbox.messages);
+}
+
 export async function readEnterpriseSubordinateRecord(cwd: string, nodeId: string): Promise<EnterpriseSubordinateRecord | null> {
   const path = subordinateRecordPath(cwd, nodeId);
   if (!existsSync(path)) return null;
