@@ -392,13 +392,11 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   {
     const promptsSrc = join(pkgRoot, "prompts");
     const promptsDst = scopeDirs.promptsDir;
-    summary.prompts = await installDirectory(
+    summary.prompts = await installPrompts(
       promptsSrc,
       promptsDst,
-      ".md",
       backupContext,
       { force, dryRun, verbose },
-      "prompt",
     );
     const cleanedLegacyPromptShims = await cleanupLegacySkillPromptShims(
       promptsSrc,
@@ -711,6 +709,80 @@ async function syncManagedContent(
   }
 }
 
+function isInstallablePromptStatus(status: string | undefined): boolean {
+  return status === "active" || status === "internal";
+}
+
+async function installPrompts(
+  srcDir: string,
+  dstDir: string,
+  backupContext: SetupBackupContext,
+  options: SetupOptions,
+): Promise<SetupCategorySummary> {
+  const summary = createEmptyCategorySummary();
+  if (!existsSync(srcDir)) return summary;
+
+  const manifest = tryReadCatalogManifest();
+  const agentStatusByName = manifest
+    ? new Map(manifest.agents.map((agent) => [agent.name, agent.status]))
+    : null;
+
+  const files = await readdir(srcDir);
+  const staleCandidatePromptNames = new Set(
+    manifest?.agents.map((agent) => agent.name) ?? [],
+  );
+
+  for (const file of files) {
+    if (!file.endsWith('.md')) continue;
+    const src = join(srcDir, file);
+    const srcStat = await stat(src);
+    if (!srcStat.isFile()) continue;
+
+    const promptName = file.slice(0, -3);
+    staleCandidatePromptNames.add(promptName);
+
+    const status = agentStatusByName?.get(promptName);
+    if (agentStatusByName && status !== undefined && !isInstallablePromptStatus(status)) {
+      summary.skipped += 1;
+      if (options.verbose) {
+        console.log(`  skipped prompt ${file} (status: ${status})`);
+      }
+      continue;
+    }
+
+    const dst = join(dstDir, file);
+    await syncManagedFileFromDisk(
+      src,
+      dst,
+      summary,
+      backupContext,
+      options,
+      `prompt ${file}`,
+    );
+  }
+
+  if (options.force && manifest && existsSync(dstDir)) {
+    for (const promptName of staleCandidatePromptNames) {
+      const status = agentStatusByName?.get(promptName);
+      if (status === undefined || isInstallablePromptStatus(status)) continue;
+
+      const stalePromptPath = join(dstDir, `${promptName}.md`);
+      if (!existsSync(stalePromptPath)) continue;
+
+      if (!options.dryRun) {
+        await rm(stalePromptPath, { force: true });
+      }
+      summary.removed += 1;
+      if (options.verbose) {
+        const prefix = options.dryRun ? 'would remove stale prompt' : 'removed stale prompt';
+        console.log(`  ${prefix} ${promptName}.md (status: ${status})`);
+      }
+    }
+  }
+
+  return summary;
+}
+
 async function installDirectory(
   srcDir: string,
   dstDir: string,
@@ -752,7 +824,21 @@ async function refreshNativeAgentConfigs(
     await mkdir(agentsDir, { recursive: true });
   }
 
+  const manifest = tryReadCatalogManifest();
+  const agentStatusByName = manifest
+    ? new Map(manifest.agents.map((entry) => [entry.name, entry.status]))
+    : null;
+
   for (const [name, agent] of Object.entries(AGENT_DEFINITIONS)) {
+    const status = agentStatusByName?.get(name);
+    if (agentStatusByName && status !== undefined && !isInstallablePromptStatus(status)) {
+      summary.skipped += 1;
+      if (options.verbose) {
+        console.log(`  skipped native agent ${name}.toml (status: ${status})`);
+      }
+      continue;
+    }
+
     const promptPath = join(pkgRoot, "prompts", `${name}.md`);
     if (!existsSync(promptPath)) {
       continue;

@@ -149,4 +149,47 @@ describe('omx setup skills overwrite behavior', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+
+  it('skips merged prompt files on install and removes stale merged prompt files on --force', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-setup-prompts-'));
+    const previousCwd = process.cwd();
+    try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      process.chdir(wd);
+
+      await setup({ scope: 'project' });
+
+      const mergedPrompt = join(wd, '.codex', 'prompts', 'security-reviewer.md');
+      assert.equal(existsSync(mergedPrompt), false);
+
+      await writeFile(mergedPrompt, '# stale merged prompt\n');
+      assert.equal(existsSync(mergedPrompt), true);
+
+      await setup({ scope: 'project', force: true });
+      assert.equal(existsSync(mergedPrompt), false);
+      assert.equal(existsSync(join(wd, '.codex', 'prompts', 'code-reviewer.md')), true);
+    } finally {
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not install native agent configs for merged prompt roles', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-setup-prompts-'));
+    const previousCwd = process.cwd();
+    try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      process.chdir(wd);
+
+      await setup({ scope: 'project' });
+
+      assert.equal(existsSync(join(wd, '.omx', 'agents', 'security-reviewer.toml')), false);
+      assert.equal(existsSync(join(wd, '.omx', 'agents', 'code-reviewer.toml')), true);
+    } finally {
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
 });
