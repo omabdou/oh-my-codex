@@ -710,35 +710,6 @@ async function syncManagedContent(
   }
 }
 
-async function installDirectory(
-  srcDir: string,
-  dstDir: string,
-  ext: string,
-  backupContext: SetupBackupContext,
-  options: SetupOptions,
-  kindLabel: string,
-): Promise<SetupCategorySummary> {
-  const summary = createEmptyCategorySummary();
-  if (!existsSync(srcDir)) return summary;
-  const files = await readdir(srcDir);
-  for (const file of files) {
-    if (!file.endsWith(ext)) continue;
-    const src = join(srcDir, file);
-    const dst = join(dstDir, file);
-    const srcStat = await stat(src);
-    if (!srcStat.isFile()) continue;
-    await syncManagedFileFromDisk(
-      src,
-      dst,
-      summary,
-      backupContext,
-      options,
-      `${kindLabel} ${file}`,
-    );
-  }
-  return summary;
-}
-
 async function installPrompts(
   srcDir: string,
   dstDir: string,
