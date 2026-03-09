@@ -9,7 +9,9 @@ import { asNumber, safeString } from './utils.js';
 import { readJsonIfExists } from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
+import { checkPaneReadyForTeamSendKeys } from './team-tmux-guard.js';
 import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
+const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
 
 async function readTeamStateRootFromJson(path) {
   try {
@@ -202,6 +204,7 @@ async function emitLeaderPaneMissingDeferred({
   tmuxSession,
   leaderPaneId,
   reason = 'leader_pane_missing_no_injection',
+  paneCurrentCommand = '',
 }) {
   const nowIso = new Date().toISOString();
   await logTmuxHookEvent(logsDir, {
@@ -214,6 +217,7 @@ async function emitLeaderPaneMissingDeferred({
     leader_pane_id: leaderPaneId || null,
     tmux_session: tmuxSession || null,
     tmux_injection_attempted: false,
+    pane_current_command: paneCurrentCommand || null,
   }).catch(() => {});
 
   const eventsDir = join(stateDir, 'team', teamName, 'events');
@@ -230,6 +234,7 @@ async function emitLeaderPaneMissingDeferred({
     leader_pane_id: leaderPaneId || null,
     tmux_session: tmuxSession || null,
     tmux_injection_attempted: false,
+    pane_current_command: paneCurrentCommand || null,
   };
   await appendFile(eventsPath, JSON.stringify(event) + '\n').catch(() => {});
 }
@@ -313,6 +318,28 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
   const N = workers.length;
   const message = `[OMX] All ${N} worker${N === 1 ? '' : 's'} idle. Ready for next instructions. ${DEFAULT_MARKER}`;
   const tmuxTarget = leaderPaneId;
+  const paneGuard = await checkPaneReadyForTeamSendKeys(tmuxTarget);
+  if (!paneGuard.ok) {
+    const nextIdleState = {
+      ...idleState,
+      last_notified_at_ms: nowMs,
+      last_notified_at: nowIso,
+      worker_count: N,
+      delivery: 'deferred',
+    };
+    await writeFile(idleStatePath, JSON.stringify(nextIdleState, null, 2)).catch(() => {});
+    await emitLeaderPaneMissingDeferred({
+      stateDir,
+      logsDir,
+      teamName,
+      workerName,
+      tmuxSession,
+      leaderPaneId,
+      reason: LEADER_PANE_SHELL_NO_INJECTION_REASON,
+      paneCurrentCommand: paneGuard.paneCurrentCommand,
+    });
+    return;
+  }
 
   try {
     await runProcess('tmux', ['send-keys', '-t', tmuxTarget, '-l', message], 3000);
@@ -454,6 +481,30 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
     return;
   }
   const tmuxTarget = leaderPaneId;
+  const paneGuard = await checkPaneReadyForTeamSendKeys(tmuxTarget);
+  if (!paneGuard.ok) {
+    try {
+      const tmpPath = cooldownPath + '.tmp.' + process.pid;
+      await writeFile(tmpPath, JSON.stringify({
+        last_notified_at_ms: nowMs,
+        last_notified_at: nowIso,
+        prev_state: prevState,
+        delivery: 'deferred',
+      }, null, 2));
+      await rename(tmpPath, cooldownPath);
+    } catch { /* best effort */ }
+    await emitLeaderPaneMissingDeferred({
+      stateDir,
+      logsDir,
+      teamName,
+      workerName,
+      tmuxSession,
+      leaderPaneId,
+      reason: LEADER_PANE_SHELL_NO_INJECTION_REASON,
+      paneCurrentCommand: paneGuard.paneCurrentCommand,
+    });
+    return;
+  }
 
   // Build notification message with context
   const parts = [`[OMX] ${workerName} idle`];
