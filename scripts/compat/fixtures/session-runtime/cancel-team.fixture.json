@@ -1,0 +1,25 @@
+{
+  "id": "cancel-session-team",
+  "command": ["cancel"],
+  "cwd_files": {
+    ".omx/state/session.json": {
+      "session_id": "sess1"
+    },
+    ".omx/state/sessions/sess1/team-state.json": {
+      "active": true,
+      "current_phase": "team-exec"
+    }
+  },
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": ["Cancelled: team"],
+    "state_assertions": [
+      ".omx/state/sessions/sess1/team-state.json active=false",
+      ".omx/state/sessions/sess1/team-state.json current_phase=cancelled",
+      ".omx/state/sessions/sess1/team-state.json completed_at is string"
+    ]
+  },
+  "source_contracts": [
+    "src/cli/__tests__/session-scoped-runtime.test.ts"
+  ]
+}

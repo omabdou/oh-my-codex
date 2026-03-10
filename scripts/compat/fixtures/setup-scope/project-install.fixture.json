@@ -1,0 +1,27 @@
+{
+  "id": "setup-project-artifacts",
+  "command": ["setup", "--scope", "project"],
+  "env": {
+    "HOME": "<fixture-home>",
+    "CODEX_HOME": "<fixture-home>/.codex"
+  },
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Using setup scope: project",
+      "Generated AGENTS.md in project root."
+    ],
+    "artifact_assertions": [
+      ".codex/prompts/ exists under cwd",
+      ".agents/skills/ exists under cwd",
+      ".codex/config.toml exists under cwd",
+      ".omx/agents/executor.toml exists under cwd",
+      ".omx/setup-scope.json exists under cwd and records scope=project",
+      "AGENTS.md is generated in cwd"
+    ]
+  },
+  "normalizers": ["normalize-temp-paths", "normalize-path-separators"],
+  "source_contracts": [
+    "src/cli/__tests__/setup-scope.test.ts"
+  ]
+}

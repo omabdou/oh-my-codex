@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "generated_for": "launch-feat-omx-cli-rust-refactor",
+  "slices": [
+    {
+      "id": "setup-dry-run",
+      "parity_mode": "normalized-text+artifact-plan",
+      "summary": "Capture omx setup --dry-run text plus follow-up project-scope setup artifact expectations before native cutover.",
+      "source_contracts": [
+        "src/cli/__tests__/setup-scope.test.ts",
+        "src/cli/__tests__/setup-skills-overwrite.test.ts"
+      ],
+      "commands": [
+        {
+          "id": "setup-dry-run-project",
+          "argv": ["setup", "--dry-run", "--scope", "project"],
+          "notes": "Keep output assertions scoped to stable summary lines such as resolved scope and dry-run messaging."
+        },
+        {
+          "id": "setup-project-artifacts",
+          "argv": ["setup", "--scope", "project"],
+          "notes": "Run in a temp repo and compare project-root file-tree artifacts rather than terminal text."
+        },
+        {
+          "id": "setup-user-default",
+          "argv": ["setup"],
+          "notes": "Run in a temp repo with a seeded project AGENTS.md and compare HOME-scoped artifacts plus project AGENTS.md preservation."
+        }
+      ],
+      "normalizers": [
+        "normalize-temp-paths",
+        "normalize-path-separators"
+      ],
+      "artifact_assertions": [
+        ".codex/prompts/ exists under cwd for project scope",
+        ".agents/skills/ exists under cwd for project scope",
+        "<HOME>/.codex/prompts/ exists for user scope",
+        "<HOME>/.agents/skills/ exists for user scope",
+        ".omx/setup-scope.json records the expected scope",
+        "project AGENTS.md is generated for project scope and preserved for user scope"
+      ]
+    },
+    {
+      "id": "doctor-team",
+      "parity_mode": "normalized-text",
+      "summary": "Capture deterministic omx doctor --team warning/failure families using controlled fixture directories and fake tmux binaries.",
+      "source_contracts": [
+        "src/cli/__tests__/doctor-team.test.ts"
+      ],
+      "commands": [
+        {
+          "id": "doctor-team-resume-blocker",
+          "argv": ["doctor", "--team"],
+          "notes": "Fixture should synthesize missing tmux session state and assert resume_blocker output plus exit code 1."
+        },
+        {
+          "id": "doctor-team-delayed-status-lag",
+          "argv": ["doctor", "--team"],
+          "notes": "Fixture should synthesize working worker + stale heartbeat and assert delayed_status_lag output plus exit code 1."
+        },
+        {
+          "id": "doctor-team-orphan-warning",
+          "argv": ["doctor", "--team"],
+          "notes": "Fixture should fake an unattributed tmux session and assert orphan_tmux_session warning output with exit code 0."
+        }
+      ],
+      "normalizers": [
+        "normalize-temp-paths",
+        "normalize-path-separators",
+        "normalize-session-ids"
+      ],
+      "artifact_assertions": [
+        ".omx/state/team/<team>/config.json fixture present",
+        "workers/<worker>/status.json and heartbeat.json fixture data preserved for the targeted issue"
+      ]
+    },
+    {
+      "id": "team-status-cancel",
+      "parity_mode": "normalized-text+artifact-plan",
+      "summary": "Capture session-scoped status/cancel behavior and team status snapshots without depending on unstable live tmux output.",
+      "source_contracts": [
+        "src/cli/__tests__/session-scoped-runtime.test.ts",
+        "src/cli/__tests__/team.test.ts",
+        "src/cli/team.ts"
+      ],
+      "commands": [
+        {
+          "id": "status-session-team-active",
+          "argv": ["status"],
+          "notes": "Fixture should seed .omx/state/session.json plus sessions/<id>/team-state.json and assert the stable team: ACTIVE summary line."
+        },
+        {
+          "id": "cancel-session-team",
+          "argv": ["cancel"],
+          "notes": "Fixture should assert Cancelled: team and verify the state file flips to inactive/cancelled with completed_at set."
+        },
+        {
+          "id": "team-status-snapshot",
+          "argv": ["team", "status", "fixture-team"],
+          "notes": "Fixture should compare phase/task-count summary lines from monitorTeam-backed output instead of raw runtime logs."
+        }
+      ],
+      "normalizers": [
+        "normalize-temp-paths",
+        "normalize-path-separators",
+        "normalize-session-ids"
+      ],
+      "artifact_assertions": [
+        ".omx/state/sessions/<id>/team-state.json current_phase becomes cancelled after cancel",
+        "completed_at is populated after cancel",
+        "team status fixture includes deterministic task and worker counts"
+      ]
+    }
+  ]
+}

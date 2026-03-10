@@ -1,0 +1,23 @@
+{
+  "id": "doctor-team-resume-blocker",
+  "command": ["doctor", "--team"],
+  "cwd_files": {
+    ".omx/state/team/alpha/config.json": {
+      "name": "alpha",
+      "tmux_session": "omx-team-alpha"
+    }
+  },
+  "path_setup": {
+    "bin/tmux": "#!/bin/sh\n# list-sessions succeeds with no matching sessions\nif [ \"$1\" = \"list-sessions\" ]; then exit 0; fi\nexit 0\n"
+  },
+  "env": {
+    "PATH": "<fixture-bin>:${PATH}"
+  },
+  "expect": {
+    "exit_code": 1,
+    "stdout_contains": ["resume_blocker"]
+  },
+  "source_contracts": [
+    "src/cli/__tests__/doctor-team.test.ts"
+  ]
+}

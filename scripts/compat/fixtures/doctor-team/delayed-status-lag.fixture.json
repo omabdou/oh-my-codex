@@ -1,0 +1,28 @@
+{
+  "id": "doctor-team-delayed-status-lag",
+  "command": ["doctor", "--team"],
+  "cwd_files": {
+    ".omx/state/team/gamma/config.json": {
+      "name": "gamma",
+      "tmux_session": "omx-team-gamma"
+    },
+    ".omx/state/team/gamma/workers/worker-1/status.json": {
+      "state": "working",
+      "updated_at": "<dynamic-now>"
+    },
+    ".omx/state/team/gamma/workers/worker-1/heartbeat.json": {
+      "pid": 123,
+      "last_turn_at": "<dynamic-stale-120s>",
+      "turn_count": 10,
+      "alive": true
+    }
+  },
+  "expect": {
+    "exit_code": 1,
+    "stdout_contains": ["delayed_status_lag"]
+  },
+  "normalizers": ["normalize-temp-paths", "normalize-path-separators"],
+  "source_contracts": [
+    "src/cli/__tests__/doctor-team.test.ts"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "setup-project-artifacts",
+  "command": ["setup", "--scope", "project"],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Using setup scope: project",
+      "Generated AGENTS.md in project root.",
+      "Setup refresh summary:",
+      "Setup complete! Run \"omx doctor\" to verify installation."
+    ],
+    "stderr": ""
+  },
+  "artifact_assertions": [
+    ".codex/prompts exists",
+    ".agents/skills exists",
+    ".codex/config.toml exists",
+    ".omx/agents/executor.toml exists",
+    ".omx/setup-scope.json json scope=project",
+    "AGENTS.md contains ./.codex/prompts",
+    "AGENTS.md contains ./.agents/skills"
+  ],
+  "source_contracts": [
+    "src/cli/__tests__/setup-scope.test.ts"
+  ]
+}

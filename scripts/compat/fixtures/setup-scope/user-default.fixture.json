@@ -1,0 +1,30 @@
+{
+  "id": "setup-user-default",
+  "command": ["setup"],
+  "cwd_files": {
+    "AGENTS.md": "# keep my project agents instructions\n"
+  },
+  "env": {
+    "HOME": "<fixture-home>",
+    "CODEX_HOME": "<fixture-home>/.codex"
+  },
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Using setup scope: user",
+      "User scope leaves project AGENTS.md unchanged."
+    ],
+    "artifact_assertions": [
+      "<fixture-home>/.codex/prompts/ exists",
+      "<fixture-home>/.agents/skills/ exists",
+      "<fixture-home>/.omx/agents/executor.toml exists",
+      ".omx/setup-scope.json exists under cwd and records scope=user",
+      "cwd/AGENTS.md remains byte-for-byte unchanged"
+    ]
+  },
+  "normalizers": ["normalize-temp-paths", "normalize-path-separators"],
+  "source_contracts": [
+    "src/cli/__tests__/setup-scope.test.ts",
+    "src/cli/__tests__/setup-agents-overwrite.test.ts"
+  ]
+}
