@@ -19,7 +19,12 @@
         {
           "id": "setup-project-artifacts",
           "argv": ["setup", "--scope", "project"],
-          "notes": "Run in a temp repo and compare file-tree artifacts rather than terminal text."
+          "notes": "Run in a temp repo and compare project-root file-tree artifacts rather than terminal text."
+        },
+        {
+          "id": "setup-user-default",
+          "argv": ["setup"],
+          "notes": "Run in a temp repo with a seeded project AGENTS.md and compare HOME-scoped artifacts plus project AGENTS.md preservation."
         }
       ],
       "normalizers": [
@@ -27,11 +32,12 @@
         "normalize-path-separators"
       ],
       "artifact_assertions": [
-        ".codex/prompts/ exists",
-        ".agents/skills/ exists",
-        ".codex/config.toml exists",
-        ".omx/agents/executor.toml exists",
-        ".omx/setup-scope.json records the expected scope"
+        ".codex/prompts/ exists under cwd for project scope",
+        ".agents/skills/ exists under cwd for project scope",
+        "<HOME>/.codex/prompts/ exists for user scope",
+        "<HOME>/.agents/skills/ exists for user scope",
+        ".omx/setup-scope.json records the expected scope",
+        "project AGENTS.md is generated for project scope and preserved for user scope"
       ]
     },
     {

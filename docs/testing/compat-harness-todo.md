@@ -17,7 +17,7 @@ Expand parity coverage in behavior-first order: keep the current byte-exact base
 
 1. Capture `setup --dry-run` and `doctor --team` baseline artifacts in temp directories.
 2. Define normalization rules for timestamps, temp paths, and randomized team/session names before any semantic diff harness is added.
-3. Add file-tree assertions for setup/user-vs-project scope behavior.
+3. Add file-tree assertions for setup/user-vs-project scope behavior (seed manifests now live under `scripts/compat/fixtures/setup-scope/`).
 4. Add uninstall cleanup snapshots once setup file-tree parity exists.
 
 ### P2 — platform + runtime harnesses

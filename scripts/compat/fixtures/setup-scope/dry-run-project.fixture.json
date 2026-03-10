@@ -1,0 +1,23 @@
+{
+  "id": "setup-dry-run-project",
+  "command": ["setup", "--dry-run", "--scope", "project"],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Using setup scope: project",
+      "[1/8] Creating directories...",
+      "Setup refresh summary:",
+      "Setup complete! Run \"omx doctor\" to verify installation."
+    ],
+    "stderr": ""
+  },
+  "artifact_assertions": [
+    ".omx/setup-scope.json absent",
+    ".codex/prompts absent",
+    ".agents/skills absent",
+    ".omx/agents absent"
+  ],
+  "source_contracts": [
+    "src/cli/__tests__/setup-scope.test.ts"
+  ]
+}

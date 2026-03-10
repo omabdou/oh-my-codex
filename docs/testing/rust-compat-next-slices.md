@@ -10,6 +10,9 @@ That JSON is intentionally a planning fixture, not a runnable suite for `scripts
 
 Checked-in fixture manifests for the first promotion step:
 
+- `scripts/compat/fixtures/setup-scope/project-dry-run.fixture.json`
+- `scripts/compat/fixtures/setup-scope/project-install.fixture.json`
+- `scripts/compat/fixtures/setup-scope/user-default.fixture.json`
 - `scripts/compat/fixtures/doctor-team/resume-blocker.fixture.json`
 - `scripts/compat/fixtures/doctor-team/delayed-status-lag.fixture.json`
 - `scripts/compat/fixtures/session-runtime/status-active.fixture.json`
@@ -26,10 +29,16 @@ Checked-in fixture manifests for the first promotion step:
 - **Stable command targets:**
   - `omx setup --dry-run --scope project`
   - `omx setup --scope project` in a temp repo
+  - `omx setup` with no persisted scope in a temp repo
+- **Checked-in planning fixtures:**
+  - `scripts/compat/fixtures/setup-scope/project-dry-run.fixture.json`
+  - `scripts/compat/fixtures/setup-scope/project-install.fixture.json`
+  - `scripts/compat/fixtures/setup-scope/user-default.fixture.json`
 - **What to compare:**
   - stable scope-selection lines in stdout
-  - project-local file tree under `.codex/`, `.agents/`, and `.omx/`
-  - persisted `.omx/setup-scope.json`
+  - project-local file tree under `.codex/`, `.agents/`, and `.omx/` for project scope
+  - user-home file tree under `<HOME>/.codex`, `<HOME>/.agents`, and `<HOME>/.omx` for user scope
+  - persisted `.omx/setup-scope.json` plus whether project `AGENTS.md` is generated vs preserved
 - **What to normalize:** temp paths and path separators only
 
 ### 2. `doctor-team`

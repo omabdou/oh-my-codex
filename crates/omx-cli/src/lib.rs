@@ -1,6 +1,7 @@
 pub mod ask;
 pub mod doctor;
 pub mod reasoning;
+pub mod setup;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -69,6 +70,7 @@ pub enum CliAction {
     Ask(Vec<String>),
     Reasoning(Vec<String>),
     Doctor(Vec<String>),
+    Setup(Vec<String>),
     Unsupported,
 }
 
@@ -89,6 +91,7 @@ where
         Some("ask") => CliAction::Ask(values.into_iter().skip(2).collect()),
         Some("reasoning") => CliAction::Reasoning(values.into_iter().skip(2).collect()),
         Some("doctor") => CliAction::Doctor(values.into_iter().skip(2).collect()),
+        Some("setup") => CliAction::Setup(values.into_iter().skip(2).collect()),
         Some(_) => CliAction::Unsupported,
     }
 }
@@ -197,6 +200,14 @@ mod tests {
         assert_eq!(
             parse_args(["omx", "doctor", "--team"]),
             CliAction::Doctor(vec!["--team".into()])
+        );
+    }
+
+    #[test]
+    fn parses_setup_subcommand_with_passthrough_args() {
+        assert_eq!(
+            parse_args(["omx", "setup", "--scope", "project"]),
+            CliAction::Setup(vec!["--scope".into(), "project".into()])
         );
     }
 

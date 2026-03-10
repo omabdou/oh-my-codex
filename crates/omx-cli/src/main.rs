@@ -56,6 +56,21 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        omx_cli::CliAction::Setup(args) => match omx_cli::setup::run_setup(
+            &args,
+            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            &std::env::vars_os().collect(),
+        ) {
+            Ok(result) => {
+                io::stdout().write_all(&result.stdout).ok();
+                io::stderr().write_all(&result.stderr).ok();
+                exit_code_from_i32(result.exit_code)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::from(1)
+            }
+        },
         omx_cli::CliAction::Unsupported => {
             eprintln!("Unsupported command in Rust scaffold. Try: omx --help");
             ExitCode::from(1)
