@@ -1,0 +1,3 @@
+oh-my-codex v0.8.11
+Node.js v25.1.0
+Platform: linux x64
