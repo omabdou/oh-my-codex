@@ -382,6 +382,8 @@ async function readTeamPaneStatus(
   recommended_inspect_worker_heartbeat_paths: Record<string, string | null>;
   recommended_inspect_worker_identity_paths: Record<string, string | null>;
   recommended_inspect_worker_inbox_paths: Record<string, string | null>;
+  recommended_inspect_team_config_paths: Record<string, string | null>;
+  recommended_inspect_team_manifest_paths: Record<string, string | null>;
   recommended_inspect_panes: Record<string, string | null>;
   recommended_inspect_command: string | null;
   recommended_inspect_commands: string[];
@@ -439,6 +441,8 @@ async function readTeamPaneStatus(
     worker_heartbeat_path: string | null;
     worker_identity_path: string | null;
     worker_inbox_path: string | null;
+    team_config_path: string | null;
+    team_manifest_path: string | null;
     command: string;
   }>;
 }> {
@@ -500,6 +504,8 @@ async function readTeamPaneStatus(
       recommended_inspect_worker_heartbeat_paths: {},
       recommended_inspect_worker_identity_paths: {},
       recommended_inspect_worker_inbox_paths: {},
+      recommended_inspect_team_config_paths: {},
+      recommended_inspect_team_manifest_paths: {},
       recommended_inspect_panes: {},
       recommended_inspect_command: null,
       recommended_inspect_commands: [],
@@ -849,6 +855,18 @@ async function readTeamPaneStatus(
       snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'inbox.md') : null,
     ]),
   );
+  const recommendedInspectTeamConfigPaths = Object.fromEntries(
+    recommendedInspectTargets.map((target) => [
+      target,
+      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'config.json') : null,
+    ]),
+  );
+  const recommendedInspectTeamManifestPaths = Object.fromEntries(
+    recommendedInspectTargets.map((target) => [
+      target,
+      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'manifest.v2.json') : null,
+    ]),
+  );
   const recommendedInspectStates = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = snapshot?.workers.find((candidate) => candidate.name === target);
@@ -945,6 +963,8 @@ async function readTeamPaneStatus(
         worker_heartbeat_path: recommendedInspectWorkerHeartbeatPaths[target] ?? null,
         worker_identity_path: recommendedInspectWorkerIdentityPaths[target] ?? null,
         worker_inbox_path: recommendedInspectWorkerInboxPaths[target] ?? null,
+        team_config_path: recommendedInspectTeamConfigPaths[target] ?? null,
+        team_manifest_path: recommendedInspectTeamManifestPaths[target] ?? null,
         command,
       };
     })
@@ -1009,6 +1029,8 @@ async function readTeamPaneStatus(
     recommended_inspect_worker_heartbeat_paths: recommendedInspectWorkerHeartbeatPaths,
     recommended_inspect_worker_identity_paths: recommendedInspectWorkerIdentityPaths,
     recommended_inspect_worker_inbox_paths: recommendedInspectWorkerInboxPaths,
+    recommended_inspect_team_config_paths: recommendedInspectTeamConfigPaths,
+    recommended_inspect_team_manifest_paths: recommendedInspectTeamManifestPaths,
     recommended_inspect_panes: recommendedInspectPanes,
     recommended_inspect_command: recommendedInspectCommand,
     recommended_inspect_commands: recommendedInspectCommands,
@@ -1284,6 +1306,16 @@ function renderTeamPaneStatus(
       console.log(`inspect_worker_inbox_path_${target}: ${workerInboxPath}`);
     }
   }
+  for (const [target, teamConfigPath] of Object.entries(paneStatus.recommended_inspect_team_config_paths)) {
+    if (teamConfigPath) {
+      console.log(`inspect_team_config_path_${target}: ${teamConfigPath}`);
+    }
+  }
+  for (const [target, teamManifestPath] of Object.entries(paneStatus.recommended_inspect_team_manifest_paths)) {
+    if (teamManifestPath) {
+      console.log(`inspect_team_manifest_path_${target}: ${teamManifestPath}`);
+    }
+  }
   for (const [target, paneId] of Object.entries(paneStatus.recommended_inspect_panes)) {
     if (paneId) {
       console.log(`inspect_pane_${target}: ${paneId}`);
@@ -1361,7 +1393,9 @@ function renderTeamPaneStatus(
     const workerHeartbeatPathPart = item.worker_heartbeat_path ? ` worker_heartbeat_path=${item.worker_heartbeat_path}` : '';
     const workerIdentityPathPart = item.worker_identity_path ? ` worker_identity_path=${item.worker_identity_path}` : '';
     const workerInboxPathPart = item.worker_inbox_path ? ` worker_inbox_path=${item.worker_inbox_path}` : '';
-    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreeRepoRootPart}${worktreePathPart}${worktreeBranchPart}${worktreeDetachedPart}${worktreeCreatedPart}${teamStateRootPart}${workdirPart}${assignedTasksPart}${taskStatusPart}${taskResultPart}${taskErrorPart}${taskVersionPart}${taskCreatedAtPart}${taskCompletedAtPart}${taskDependsOnPart}${taskClaimPresentPart}${taskClaimOwnerPart}${taskClaimTokenPart}${taskClaimLeasePart}${approvalRequiredPart}${requiresCodeChangePart}${taskDescriptionPart}${blockedByPart}${taskRolePart}${taskOwnerPart}${approvalStatusPart}${approvalReviewerPart}${approvalReasonPart}${approvalDecidedAtPart}${approvalRecordPresentPart}${stateReasonPart}${taskPart}${subjectPart}${taskPathPart}${approvalPathPart}${workerStatusPathPart}${workerHeartbeatPathPart}${workerIdentityPathPart}${workerInboxPathPart} reason=${item.reason}${statePart} command=${item.command}`);
+    const teamConfigPathPart = item.team_config_path ? ` team_config_path=${item.team_config_path}` : '';
+    const teamManifestPathPart = item.team_manifest_path ? ` team_manifest_path=${item.team_manifest_path}` : '';
+    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreeRepoRootPart}${worktreePathPart}${worktreeBranchPart}${worktreeDetachedPart}${worktreeCreatedPart}${teamStateRootPart}${workdirPart}${assignedTasksPart}${taskStatusPart}${taskResultPart}${taskErrorPart}${taskVersionPart}${taskCreatedAtPart}${taskCompletedAtPart}${taskDependsOnPart}${taskClaimPresentPart}${taskClaimOwnerPart}${taskClaimTokenPart}${taskClaimLeasePart}${approvalRequiredPart}${requiresCodeChangePart}${taskDescriptionPart}${blockedByPart}${taskRolePart}${taskOwnerPart}${approvalStatusPart}${approvalReviewerPart}${approvalReasonPart}${approvalDecidedAtPart}${approvalRecordPresentPart}${stateReasonPart}${taskPart}${subjectPart}${taskPathPart}${approvalPathPart}${workerStatusPathPart}${workerHeartbeatPathPart}${workerIdentityPathPart}${workerInboxPathPart}${teamConfigPathPart}${teamManifestPathPart} reason=${item.reason}${statePart} command=${item.command}`);
   }
 
   for (const [target, command] of Object.entries(paneStatus.sparkshell_commands)) {
