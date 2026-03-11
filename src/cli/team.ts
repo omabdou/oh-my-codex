@@ -343,6 +343,7 @@ function readTeamPaneStatus(
   recommended_inspect_worktree_paths: Record<string, string | null>;
   recommended_inspect_worktree_branches: Record<string, string | null>;
   recommended_inspect_workdirs: Record<string, string | null>;
+  recommended_inspect_assigned_tasks: Record<string, string[]>;
   recommended_inspect_states: Record<string, WorkerStatus['state'] | null>;
   recommended_inspect_tasks: Record<string, string | null>;
   recommended_inspect_subjects: Record<string, string | null>;
@@ -365,6 +366,7 @@ function readTeamPaneStatus(
     worktree_path: string | null;
     worktree_branch: string | null;
     working_dir: string | null;
+    assigned_tasks: string[];
     reason: string;
     state: WorkerStatus['state'] | null;
     task_id: string | null;
@@ -393,6 +395,7 @@ function readTeamPaneStatus(
       recommended_inspect_worktree_paths: {},
       recommended_inspect_worktree_branches: {},
       recommended_inspect_workdirs: {},
+      recommended_inspect_assigned_tasks: {},
       recommended_inspect_states: {},
       recommended_inspect_tasks: {},
       recommended_inspect_subjects: {},
@@ -511,6 +514,12 @@ function readTeamPaneStatus(
       return [target, worker?.working_dir ?? worker?.worktree_path ?? null];
     }),
   );
+  const recommendedInspectAssignedTasks = Object.fromEntries(
+    recommendedInspectTargets.map((target) => {
+      const worker = config.workers.find((candidate) => candidate.name === target);
+      return [target, worker?.assigned_tasks ?? []];
+    }),
+  );
   const recommendedInspectTasks = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = snapshot?.workers.find((candidate) => candidate.name === target);
@@ -579,6 +588,7 @@ function readTeamPaneStatus(
         worktree_path: recommendedInspectWorktreePaths[target] ?? null,
         worktree_branch: recommendedInspectWorktreeBranches[target] ?? null,
         working_dir: recommendedInspectWorkdirs[target] ?? null,
+        assigned_tasks: recommendedInspectAssignedTasks[target] ?? [],
         reason: recommendedInspectReasons[target] ?? 'unknown',
         state: recommendedInspectStates[target] ?? null,
         task_id: recommendedInspectTasks[target] ?? null,
@@ -601,6 +611,7 @@ function readTeamPaneStatus(
       worktree_path: string | null;
       worktree_branch: string | null;
       working_dir: string | null;
+      assigned_tasks: string[];
       reason: string;
       state: WorkerStatus['state'] | null;
       task_id: string | null;
@@ -630,6 +641,7 @@ function readTeamPaneStatus(
     recommended_inspect_worktree_paths: recommendedInspectWorktreePaths,
     recommended_inspect_worktree_branches: recommendedInspectWorktreeBranches,
     recommended_inspect_workdirs: recommendedInspectWorkdirs,
+    recommended_inspect_assigned_tasks: recommendedInspectAssignedTasks,
     recommended_inspect_states: recommendedInspectStates,
     recommended_inspect_tasks: recommendedInspectTasks,
     recommended_inspect_subjects: recommendedInspectSubjects,
@@ -723,6 +735,11 @@ function renderTeamPaneStatus(
       console.log(`inspect_workdir_${target}: ${workdir}`);
     }
   }
+  for (const [target, assignedTasks] of Object.entries(paneStatus.recommended_inspect_assigned_tasks)) {
+    if (assignedTasks.length > 0) {
+      console.log(`inspect_assigned_tasks_${target}: ${assignedTasks.join(' ')}`);
+    }
+  }
   for (const [target, state] of Object.entries(paneStatus.recommended_inspect_states)) {
     if (state) {
       console.log(`inspect_state_${target}: ${state}`);
@@ -768,10 +785,11 @@ function renderTeamPaneStatus(
     const worktreePathPart = item.worktree_path ? ` worktree_path=${item.worktree_path}` : '';
     const worktreeBranchPart = item.worktree_branch ? ` worktree_branch=${item.worktree_branch}` : '';
     const workdirPart = item.working_dir ? ` workdir=${item.working_dir}` : '';
+    const assignedTasksPart = item.assigned_tasks.length > 0 ? ` assigned_tasks=${item.assigned_tasks.join(',')}` : '';
     const statePart = item.state ? ` state=${item.state}` : '';
     const taskPart = item.task_id ? ` task=${item.task_id}` : '';
     const subjectPart = item.task_subject ? ` subject=${item.task_subject}` : '';
-    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${workdirPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
+    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${workdirPart}${assignedTasksPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
   }
 
   for (const [target, command] of Object.entries(paneStatus.sparkshell_commands)) {
