@@ -10,9 +10,5 @@ dependencies = [
 ]
 
 [[package]]
-name = "omx-explore-harness"
-version = "0.1.0"
-
-[[package]]
 name = "omx-process"
 version = "0.8.11"
