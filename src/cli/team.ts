@@ -834,6 +834,8 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
         team_name: snapshot.teamName,
         status: 'ok',
         phase: snapshot.phase,
+        dead_workers: snapshot.deadWorkers,
+        non_reporting_workers: snapshot.nonReportingWorkers,
         workers: {
           total: snapshot.workers.length,
           dead: snapshot.deadWorkers.length,
@@ -854,6 +856,12 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
     }
     console.log(`team=${snapshot.teamName} phase=${snapshot.phase}`);
     console.log(`workers: total=${snapshot.workers.length} dead=${snapshot.deadWorkers.length} non_reporting=${snapshot.nonReportingWorkers.length}`);
+    if (snapshot.deadWorkers.length > 0) {
+      console.log(`dead_workers: ${snapshot.deadWorkers.join(' ')}`);
+    }
+    if (snapshot.nonReportingWorkers.length > 0) {
+      console.log(`non_reporting_workers: ${snapshot.nonReportingWorkers.join(' ')}`);
+    }
     console.log(`tasks: total=${snapshot.tasks.total} pending=${snapshot.tasks.pending} blocked=${snapshot.tasks.blocked} in_progress=${snapshot.tasks.in_progress} completed=${snapshot.tasks.completed} failed=${snapshot.tasks.failed}`);
     if (snapshot.performance) {
       console.log(

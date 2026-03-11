@@ -646,6 +646,7 @@ describe('teamCommand status', () => {
       await teamCommand(['status', 'pane-team']);
 
       const output = logs.join('\n');
+      assert.match(output, /dead_workers: worker-1 worker-2/);
       assert.match(output, /panes: leader=%10 hud=%11/);
       assert.match(output, /worker_panes: worker-1=%21 worker-2=%22/);
       assert.match(output, /sparkshell_hint: omx sparkshell --tmux-pane <pane-id> --tail-lines 400/);
@@ -701,6 +702,8 @@ describe('teamCommand status', () => {
         command?: string;
         team_name?: string;
         status?: string;
+        dead_workers?: string[];
+        non_reporting_workers?: string[];
         panes?: {
           leader_pane_id?: string | null;
           hud_pane_id?: string | null;
@@ -714,6 +717,8 @@ describe('teamCommand status', () => {
       assert.equal(payload.command, 'omx team status');
       assert.equal(payload.team_name, 'pane-json-team');
       assert.equal(payload.status, 'ok');
+      assert.deepEqual(payload.dead_workers, ['worker-1']);
+      assert.deepEqual(payload.non_reporting_workers, []);
       assert.equal(payload.panes?.leader_pane_id, '%30');
       assert.equal(payload.panes?.hud_pane_id, '%31');
       assert.deepEqual(payload.panes?.worker_panes, { 'worker-1': '%41' });
