@@ -132,6 +132,7 @@ From terminal:
 ```bash
 omx team 4:executor "parallelize a multi-module refactor"
 omx team status <team-name>
+omx team status <team-name> --json
 omx team shutdown <team-name>
 ```
 
@@ -370,6 +371,7 @@ omx team <args>
 omx team --help
 omx team api --help
 omx team status <team-name>
+omx team status <team-name> --json
 omx team resume <team-name>
 omx team shutdown <team-name>
 ```

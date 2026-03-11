@@ -37,7 +37,7 @@ interface ParsedTeamArgs {
 const MIN_WORKER_COUNT = 1;
 const TEAM_HELP = `
 Usage: omx team [ralph] [N:agent-type] "<task description>"
-       omx team status <team-name>
+       omx team status <team-name> [--json]
        omx team await <team-name> [--timeout-ms <ms>] [--after-event-id <id>] [--json]
        omx team resume <team-name>
        omx team shutdown <team-name> [--force] [--ralph]
@@ -47,6 +47,7 @@ Usage: omx team [ralph] [N:agent-type] "<task description>"
 Examples:
   omx team 3:executor "fix failing tests"
   omx team status my-team
+  omx team status my-team --json
   omx team api send-message --input '{"team_name":"my-team","from_worker":"worker-1","to_worker":"leader-fixed","body":"ACK"}' --json
 `;
 
@@ -283,26 +284,58 @@ function buildDeadWorkerAwaitEvent(teamName: string, snapshot: TeamSnapshot): Te
   };
 }
 
-function renderTeamPaneStatus(
+function readTeamPaneStatus(
   config: Awaited<ReturnType<typeof readTeamConfig>>,
-): void {
-  if (!config) return;
-
-  const leaderPaneId = config.leader_pane_id?.trim();
-  const hudPaneId = config.hud_pane_id?.trim();
-  if (leaderPaneId || hudPaneId) {
-    console.log(`panes: leader=${leaderPaneId || '-'} hud=${hudPaneId || '-'}`);
+): {
+  leader_pane_id: string | null;
+  hud_pane_id: string | null;
+  worker_panes: Record<string, string>;
+  sparkshell_hint: string | null;
+} {
+  if (!config) {
+    return {
+      leader_pane_id: null,
+      hud_pane_id: null,
+      worker_panes: {},
+      sparkshell_hint: null,
+    };
   }
 
-  const workerPanePairs = config.workers
-    .map((worker) => {
-      const paneId = worker.pane_id?.trim();
-      return paneId ? `${worker.name}=${paneId}` : '';
-    })
-    .filter(Boolean);
+  const leaderPaneId = config.leader_pane_id?.trim() || null;
+  const hudPaneId = config.hud_pane_id?.trim() || null;
 
+  const workerPanes = Object.fromEntries(
+    config.workers
+      .map((worker) => {
+        const paneId = worker.pane_id?.trim();
+        return paneId ? [worker.name, paneId] : null;
+      })
+      .filter((entry): entry is [string, string] => entry !== null),
+  );
+
+  return {
+    leader_pane_id: leaderPaneId,
+    hud_pane_id: hudPaneId,
+    worker_panes: workerPanes,
+    sparkshell_hint: Object.keys(workerPanes).length > 0
+      ? 'omx sparkshell --tmux-pane <pane-id> --tail-lines 400'
+      : null,
+  };
+}
+
+function renderTeamPaneStatus(
+  paneStatus: ReturnType<typeof readTeamPaneStatus>,
+): void {
+  if (paneStatus.leader_pane_id || paneStatus.hud_pane_id) {
+    console.log(`panes: leader=${paneStatus.leader_pane_id || '-'} hud=${paneStatus.hud_pane_id || '-'}`);
+  }
+
+  const workerPanePairs = Object.entries(paneStatus.worker_panes).map(([workerName, paneId]) => `${workerName}=${paneId}`);
   if (workerPanePairs.length > 0) {
     console.log(`worker_panes: ${workerPanePairs.join(' ')}`);
+  }
+
+  if (paneStatus.sparkshell_hint) {
     console.log('sparkshell_hint: omx sparkshell --tmux-pane <pane-id> --tail-lines 400');
   }
 }
@@ -755,10 +788,42 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
 
   if (subcommand === 'status') {
     const name = teamArgs[1];
-    if (!name) throw new Error('Usage: omx team status <team-name>');
+    const wantsJson = teamArgs.includes('--json');
+    if (!name) throw new Error('Usage: omx team status <team-name> [--json]');
     const snapshot = await monitorTeam(name, cwd);
     if (!snapshot) {
+      if (wantsJson) {
+        console.log(JSON.stringify({
+          team_name: name,
+          status: 'missing',
+        }));
+        return;
+      }
       console.log(`No team state found for ${name}`);
+      return;
+    }
+    const paneStatus = readTeamPaneStatus(await readTeamConfig(name, cwd));
+    if (wantsJson) {
+      console.log(JSON.stringify({
+        team_name: snapshot.teamName,
+        status: 'ok',
+        phase: snapshot.phase,
+        workers: {
+          total: snapshot.workers.length,
+          dead: snapshot.deadWorkers.length,
+          non_reporting: snapshot.nonReportingWorkers.length,
+        },
+        tasks: {
+          total: snapshot.tasks.total,
+          pending: snapshot.tasks.pending,
+          blocked: snapshot.tasks.blocked,
+          in_progress: snapshot.tasks.in_progress,
+          completed: snapshot.tasks.completed,
+          failed: snapshot.tasks.failed,
+        },
+        performance: snapshot.performance ?? null,
+        panes: paneStatus,
+      }));
       return;
     }
     console.log(`team=${snapshot.teamName} phase=${snapshot.phase}`);
@@ -769,7 +834,7 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
         `monitor_perf_ms: total=${snapshot.performance.total_ms} list=${snapshot.performance.list_tasks_ms} workers=${snapshot.performance.worker_scan_ms} mailbox=${snapshot.performance.mailbox_delivery_ms}`
       );
     }
-    renderTeamPaneStatus(await readTeamConfig(name, cwd));
+    renderTeamPaneStatus(paneStatus);
     return;
   }
 

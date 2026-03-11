@@ -655,6 +655,87 @@ describe('teamCommand status', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('returns pane ids and sparkshell hint in JSON mode', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-status-json-'));
+    const previousCwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(wd);
+      const config = await initTeamState('pane-json-team', 'inspect worker panes', 'executor', 1, wd);
+      config.leader_pane_id = '%30';
+      config.hud_pane_id = '%31';
+      config.workers[0]!.pane_id = '%41';
+      const manifestPath = join(wd, '.omx', 'state', 'team', 'pane-json-team', 'manifest.v2.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as {
+        leader_pane_id?: string | null;
+        hud_pane_id?: string | null;
+        workers?: Array<{ pane_id?: string }>;
+      };
+      manifest.leader_pane_id = config.leader_pane_id;
+      manifest.hud_pane_id = config.hud_pane_id;
+      manifest.workers = config.workers.map((worker) => ({
+        ...worker,
+        pane_id: worker.pane_id,
+      }));
+      await writeFile(
+        join(wd, '.omx', 'state', 'team', 'pane-json-team', 'config.json'),
+        `${JSON.stringify(config, null, 2)}\n`,
+      );
+      await writeFile(
+        manifestPath,
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+      await teamCommand(['status', 'pane-json-team', '--json']);
+
+      const payload = JSON.parse(logs.at(-1) ?? '{}') as {
+        team_name?: string;
+        status?: string;
+        panes?: {
+          leader_pane_id?: string | null;
+          hud_pane_id?: string | null;
+          worker_panes?: Record<string, string>;
+          sparkshell_hint?: string | null;
+        };
+      };
+      assert.equal(payload.team_name, 'pane-json-team');
+      assert.equal(payload.status, 'ok');
+      assert.equal(payload.panes?.leader_pane_id, '%30');
+      assert.equal(payload.panes?.hud_pane_id, '%31');
+      assert.deepEqual(payload.panes?.worker_panes, { 'worker-1': '%41' });
+      assert.equal(payload.panes?.sparkshell_hint, 'omx sparkshell --tmux-pane <pane-id> --tail-lines 400');
+    } finally {
+      console.log = originalLog;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a missing envelope in JSON mode when team state is absent', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-status-missing-'));
+    const previousCwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(wd);
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+      await teamCommand(['status', 'missing-team', '--json']);
+
+      const payload = JSON.parse(logs.at(-1) ?? '{}') as {
+        team_name?: string;
+        status?: string;
+      };
+      assert.equal(payload.team_name, 'missing-team');
+      assert.equal(payload.status, 'missing');
+    } finally {
+      console.log = originalLog;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('teamCommand await', () => {
