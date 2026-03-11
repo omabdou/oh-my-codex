@@ -363,6 +363,7 @@ async function readTeamPaneStatus(
   recommended_inspect_approval_statuses: Record<string, string | null>;
   recommended_inspect_approval_reviewers: Record<string, string | null>;
   recommended_inspect_states: Record<string, WorkerStatus['state'] | null>;
+  recommended_inspect_state_reasons: Record<string, string | null>;
   recommended_inspect_tasks: Record<string, string | null>;
   recommended_inspect_subjects: Record<string, string | null>;
   recommended_inspect_panes: Record<string, string | null>;
@@ -404,6 +405,7 @@ async function readTeamPaneStatus(
     approval_reviewer: string | null;
     reason: string;
     state: WorkerStatus['state'] | null;
+    state_reason: string | null;
     task_id: string | null;
     task_subject: string | null;
     command: string;
@@ -449,6 +451,7 @@ async function readTeamPaneStatus(
       recommended_inspect_approval_statuses: {},
       recommended_inspect_approval_reviewers: {},
       recommended_inspect_states: {},
+      recommended_inspect_state_reasons: {},
       recommended_inspect_tasks: {},
       recommended_inspect_subjects: {},
       recommended_inspect_panes: {},
@@ -714,6 +717,12 @@ async function readTeamPaneStatus(
       return [target, worker?.status.state ?? null];
     }),
   );
+  const recommendedInspectStateReasons = Object.fromEntries(
+    recommendedInspectTargets.map((target) => {
+      const worker = snapshot?.workers.find((candidate) => candidate.name === target);
+      return [target, worker?.status.reason ?? null];
+    }),
+  );
   const recommendedInspectCommand = recommendedInspectTargets.length > 0
     ? sparkshellCommands[recommendedInspectTargets[0]!] ?? null
     : null;
@@ -780,6 +789,7 @@ async function readTeamPaneStatus(
         approval_reviewer: recommendedInspectApprovalReviewers[target] ?? null,
         reason: recommendedInspectReasons[target] ?? 'unknown',
         state: recommendedInspectStates[target] ?? null,
+        state_reason: recommendedInspectStateReasons[target] ?? null,
         task_id: recommendedInspectTasks[target] ?? null,
         task_subject: recommendedInspectSubjects[target] ?? null,
         command,
@@ -828,6 +838,7 @@ async function readTeamPaneStatus(
     recommended_inspect_approval_statuses: recommendedInspectApprovalStatuses,
     recommended_inspect_approval_reviewers: recommendedInspectApprovalReviewers,
     recommended_inspect_states: recommendedInspectStates,
+    recommended_inspect_state_reasons: recommendedInspectStateReasons,
     recommended_inspect_tasks: recommendedInspectTasks,
     recommended_inspect_subjects: recommendedInspectSubjects,
     recommended_inspect_panes: recommendedInspectPanes,
@@ -1015,6 +1026,11 @@ function renderTeamPaneStatus(
       console.log(`inspect_state_${target}: ${state}`);
     }
   }
+  for (const [target, stateReason] of Object.entries(paneStatus.recommended_inspect_state_reasons)) {
+    if (stateReason) {
+      console.log(`inspect_state_reason_${target}: ${stateReason}`);
+    }
+  }
   for (const [target, taskId] of Object.entries(paneStatus.recommended_inspect_tasks)) {
     if (taskId) {
       console.log(`inspect_task_${target}: ${taskId}`);
@@ -1078,9 +1094,10 @@ function renderTeamPaneStatus(
     const approvalStatusPart = item.approval_status ? ` approval_status=${item.approval_status}` : '';
     const approvalReviewerPart = item.approval_reviewer ? ` approval_reviewer=${item.approval_reviewer}` : '';
     const statePart = item.state ? ` state=${item.state}` : '';
+    const stateReasonPart = item.state_reason ? ` state_reason=${item.state_reason}` : '';
     const taskPart = item.task_id ? ` task=${item.task_id}` : '';
     const subjectPart = item.task_subject ? ` subject=${item.task_subject}` : '';
-    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${worktreeDetachedPart}${workdirPart}${assignedTasksPart}${taskStatusPart}${taskResultPart}${taskErrorPart}${taskVersionPart}${taskCreatedAtPart}${taskCompletedAtPart}${taskDependsOnPart}${taskClaimOwnerPart}${taskClaimLeasePart}${requiresCodeChangePart}${taskDescriptionPart}${blockedByPart}${taskRolePart}${taskOwnerPart}${approvalStatusPart}${approvalReviewerPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
+    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${worktreeDetachedPart}${workdirPart}${assignedTasksPart}${taskStatusPart}${taskResultPart}${taskErrorPart}${taskVersionPart}${taskCreatedAtPart}${taskCompletedAtPart}${taskDependsOnPart}${taskClaimOwnerPart}${taskClaimLeasePart}${requiresCodeChangePart}${taskDescriptionPart}${blockedByPart}${taskRolePart}${taskOwnerPart}${approvalStatusPart}${approvalReviewerPart} reason=${item.reason}${statePart}${stateReasonPart}${taskPart}${subjectPart} command=${item.command}`);
   }
 
   for (const [target, command] of Object.entries(paneStatus.sparkshell_commands)) {
