@@ -337,6 +337,9 @@ function readTeamPaneStatus(
   recommended_inspect_turn_counts: Record<string, number | null>;
   recommended_inspect_last_turn_at: Record<string, string | null>;
   recommended_inspect_status_updated_at: Record<string, string | null>;
+  recommended_inspect_pids: Record<string, number | null>;
+  recommended_inspect_worktree_paths: Record<string, string | null>;
+  recommended_inspect_worktree_branches: Record<string, string | null>;
   recommended_inspect_workdirs: Record<string, string | null>;
   recommended_inspect_states: Record<string, WorkerStatus['state'] | null>;
   recommended_inspect_tasks: Record<string, string | null>;
@@ -354,6 +357,9 @@ function readTeamPaneStatus(
     turn_count: number | null;
     last_turn_at: string | null;
     status_updated_at: string | null;
+    pid: number | null;
+    worktree_path: string | null;
+    worktree_branch: string | null;
     working_dir: string | null;
     reason: string;
     state: WorkerStatus['state'] | null;
@@ -377,6 +383,9 @@ function readTeamPaneStatus(
       recommended_inspect_turn_counts: {},
       recommended_inspect_last_turn_at: {},
       recommended_inspect_status_updated_at: {},
+      recommended_inspect_pids: {},
+      recommended_inspect_worktree_paths: {},
+      recommended_inspect_worktree_branches: {},
       recommended_inspect_workdirs: {},
       recommended_inspect_states: {},
       recommended_inspect_tasks: {},
@@ -460,6 +469,24 @@ function readTeamPaneStatus(
       return [target, worker?.status.updated_at ?? null];
     }),
   );
+  const recommendedInspectPids = Object.fromEntries(
+    recommendedInspectTargets.map((target) => {
+      const worker = config.workers.find((candidate) => candidate.name === target);
+      return [target, worker?.pid ?? null];
+    }),
+  );
+  const recommendedInspectWorktreePaths = Object.fromEntries(
+    recommendedInspectTargets.map((target) => {
+      const worker = config.workers.find((candidate) => candidate.name === target);
+      return [target, worker?.worktree_path ?? null];
+    }),
+  );
+  const recommendedInspectWorktreeBranches = Object.fromEntries(
+    recommendedInspectTargets.map((target) => {
+      const worker = config.workers.find((candidate) => candidate.name === target);
+      return [target, worker?.worktree_branch ?? null];
+    }),
+  );
   const recommendedInspectWorkdirs = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = config.workers.find((candidate) => candidate.name === target);
@@ -525,6 +552,9 @@ function readTeamPaneStatus(
         turn_count: recommendedInspectTurnCounts[target] ?? null,
         last_turn_at: recommendedInspectLastTurnAt[target] ?? null,
         status_updated_at: recommendedInspectStatusUpdatedAt[target] ?? null,
+        pid: recommendedInspectPids[target] ?? null,
+        worktree_path: recommendedInspectWorktreePaths[target] ?? null,
+        worktree_branch: recommendedInspectWorktreeBranches[target] ?? null,
         working_dir: recommendedInspectWorkdirs[target] ?? null,
         reason: recommendedInspectReasons[target] ?? 'unknown',
         state: recommendedInspectStates[target] ?? null,
@@ -542,6 +572,9 @@ function readTeamPaneStatus(
       turn_count: number | null;
       last_turn_at: string | null;
       status_updated_at: string | null;
+      pid: number | null;
+      worktree_path: string | null;
+      worktree_branch: string | null;
       working_dir: string | null;
       reason: string;
       state: WorkerStatus['state'] | null;
@@ -566,6 +599,9 @@ function readTeamPaneStatus(
     recommended_inspect_turn_counts: recommendedInspectTurnCounts,
     recommended_inspect_last_turn_at: recommendedInspectLastTurnAt,
     recommended_inspect_status_updated_at: recommendedInspectStatusUpdatedAt,
+    recommended_inspect_pids: recommendedInspectPids,
+    recommended_inspect_worktree_paths: recommendedInspectWorktreePaths,
+    recommended_inspect_worktree_branches: recommendedInspectWorktreeBranches,
     recommended_inspect_workdirs: recommendedInspectWorkdirs,
     recommended_inspect_states: recommendedInspectStates,
     recommended_inspect_tasks: recommendedInspectTasks,
@@ -630,6 +666,21 @@ function renderTeamPaneStatus(
       console.log(`inspect_status_updated_at_${target}: ${statusUpdatedAt}`);
     }
   }
+  for (const [target, pid] of Object.entries(paneStatus.recommended_inspect_pids)) {
+    if (typeof pid === 'number') {
+      console.log(`inspect_pid_${target}: ${pid}`);
+    }
+  }
+  for (const [target, worktreePath] of Object.entries(paneStatus.recommended_inspect_worktree_paths)) {
+    if (worktreePath) {
+      console.log(`inspect_worktree_path_${target}: ${worktreePath}`);
+    }
+  }
+  for (const [target, worktreeBranch] of Object.entries(paneStatus.recommended_inspect_worktree_branches)) {
+    if (worktreeBranch) {
+      console.log(`inspect_worktree_branch_${target}: ${worktreeBranch}`);
+    }
+  }
   for (const [target, workdir] of Object.entries(paneStatus.recommended_inspect_workdirs)) {
     if (workdir) {
       console.log(`inspect_workdir_${target}: ${workdir}`);
@@ -672,11 +723,14 @@ function renderTeamPaneStatus(
     const turnCountPart = typeof item.turn_count === 'number' ? ` turn_count=${item.turn_count}` : '';
     const lastTurnPart = item.last_turn_at ? ` last_turn_at=${item.last_turn_at}` : '';
     const statusUpdatedPart = item.status_updated_at ? ` status_updated_at=${item.status_updated_at}` : '';
+    const pidPart = typeof item.pid === 'number' ? ` pid=${item.pid}` : '';
+    const worktreePathPart = item.worktree_path ? ` worktree_path=${item.worktree_path}` : '';
+    const worktreeBranchPart = item.worktree_branch ? ` worktree_branch=${item.worktree_branch}` : '';
     const workdirPart = item.working_dir ? ` workdir=${item.working_dir}` : '';
     const statePart = item.state ? ` state=${item.state}` : '';
     const taskPart = item.task_id ? ` task=${item.task_id}` : '';
     const subjectPart = item.task_subject ? ` subject=${item.task_subject}` : '';
-    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${alivePart}${turnCountPart}${lastTurnPart}${statusUpdatedPart}${workdirPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
+    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${alivePart}${turnCountPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${workdirPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
   }
 
   for (const [target, command] of Object.entries(paneStatus.sparkshell_commands)) {
