@@ -348,6 +348,7 @@ function readTeamPaneStatus(
   recommended_inspect_task_statuses: Record<string, TeamTask['status'] | null>;
   recommended_inspect_requires_code_change: Record<string, boolean | null>;
   recommended_inspect_descriptions: Record<string, string | null>;
+  recommended_inspect_blocked_by: Record<string, string[]>;
   recommended_inspect_states: Record<string, WorkerStatus['state'] | null>;
   recommended_inspect_tasks: Record<string, string | null>;
   recommended_inspect_subjects: Record<string, string | null>;
@@ -375,6 +376,7 @@ function readTeamPaneStatus(
     task_status: TeamTask['status'] | null;
     requires_code_change: boolean | null;
     task_description: string | null;
+    blocked_by: string[];
     reason: string;
     state: WorkerStatus['state'] | null;
     task_id: string | null;
@@ -408,6 +410,7 @@ function readTeamPaneStatus(
       recommended_inspect_task_statuses: {},
       recommended_inspect_requires_code_change: {},
       recommended_inspect_descriptions: {},
+      recommended_inspect_blocked_by: {},
       recommended_inspect_states: {},
       recommended_inspect_tasks: {},
       recommended_inspect_subjects: {},
@@ -565,6 +568,13 @@ function readTeamPaneStatus(
       return [target, taskId ? (taskDescriptionById.get(taskId) ?? null) : null];
     }),
   );
+  const taskBlockedById = new Map((snapshot?.tasks.items ?? []).map((task) => [task.id, task.blocked_by ?? []] as const));
+  const recommendedInspectBlockedBy = Object.fromEntries(
+    recommendedInspectTargets.map((target) => {
+      const taskId = recommendedInspectTasks[target];
+      return [target, taskId ? (taskBlockedById.get(taskId) ?? []) : []];
+    }),
+  );
   const recommendedInspectPanes = Object.fromEntries(
     recommendedInspectTargets.map((target) => [target, workerPanes[target] ?? null]),
   );
@@ -632,6 +642,7 @@ function readTeamPaneStatus(
         task_status: recommendedInspectTaskStatuses[target] ?? null,
         requires_code_change: recommendedInspectRequiresCodeChange[target] ?? null,
         task_description: recommendedInspectDescriptions[target] ?? null,
+        blocked_by: recommendedInspectBlockedBy[target] ?? [],
         reason: recommendedInspectReasons[target] ?? 'unknown',
         state: recommendedInspectStates[target] ?? null,
         task_id: recommendedInspectTasks[target] ?? null,
@@ -659,6 +670,7 @@ function readTeamPaneStatus(
       task_status: TeamTask['status'] | null;
       requires_code_change: boolean | null;
       task_description: string | null;
+      blocked_by: string[];
       reason: string;
       state: WorkerStatus['state'] | null;
       task_id: string | null;
@@ -693,6 +705,7 @@ function readTeamPaneStatus(
     recommended_inspect_task_statuses: recommendedInspectTaskStatuses,
     recommended_inspect_requires_code_change: recommendedInspectRequiresCodeChange,
     recommended_inspect_descriptions: recommendedInspectDescriptions,
+    recommended_inspect_blocked_by: recommendedInspectBlockedBy,
     recommended_inspect_states: recommendedInspectStates,
     recommended_inspect_tasks: recommendedInspectTasks,
     recommended_inspect_subjects: recommendedInspectSubjects,
@@ -811,6 +824,11 @@ function renderTeamPaneStatus(
       console.log(`inspect_description_${target}: ${description}`);
     }
   }
+  for (const [target, blockedBy] of Object.entries(paneStatus.recommended_inspect_blocked_by)) {
+    if (blockedBy.length > 0) {
+      console.log(`inspect_blocked_by_${target}: ${blockedBy.join(' ')}`);
+    }
+  }
   for (const [target, state] of Object.entries(paneStatus.recommended_inspect_states)) {
     if (state) {
       console.log(`inspect_state_${target}: ${state}`);
@@ -865,10 +883,11 @@ function renderTeamPaneStatus(
       ? ` requires_code_change=${item.requires_code_change}`
       : '';
     const taskDescriptionPart = item.task_description ? ` description=${item.task_description}` : '';
+    const blockedByPart = item.blocked_by.length > 0 ? ` blocked_by=${item.blocked_by.join(',')}` : '';
     const statePart = item.state ? ` state=${item.state}` : '';
     const taskPart = item.task_id ? ` task=${item.task_id}` : '';
     const subjectPart = item.task_subject ? ` subject=${item.task_subject}` : '';
-    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${worktreeDetachedPart}${workdirPart}${assignedTasksPart}${taskStatusPart}${requiresCodeChangePart}${taskDescriptionPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
+    console.log(`inspect_item_${index + 1}: target=${item.target}${panePart}${cliPart}${rolePart}${indexPart}${alivePart}${turnCountPart}${turnsWithoutProgressPart}${lastTurnPart}${statusUpdatedPart}${pidPart}${worktreePathPart}${worktreeBranchPart}${worktreeDetachedPart}${workdirPart}${assignedTasksPart}${taskStatusPart}${requiresCodeChangePart}${taskDescriptionPart}${blockedByPart} reason=${item.reason}${statePart}${taskPart}${subjectPart} command=${item.command}`);
   }
 
   for (const [target, command] of Object.entries(paneStatus.sparkshell_commands)) {
