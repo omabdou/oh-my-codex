@@ -269,6 +269,7 @@ npm run build:full
 npm run build:explore
 npm run build:explore:release
 npm run test:explore
+node scripts/smoke-packed-install.mjs --release-assets-dir ./release-assets
 node scripts/check-version-sync.mjs --tag v$(node -p "require('./package.json').version")
 ```
 

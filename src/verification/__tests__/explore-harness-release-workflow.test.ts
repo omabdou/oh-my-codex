@@ -29,8 +29,10 @@ describe('native release workflow', () => {
     assert.match(workflow, /native-release-manifest\.json/);
     assert.match(workflow, /Publish Native Assets/);
     assert.match(workflow, /Smoke Verify Native Assets/);
+    assert.match(workflow, /Smoke Test Packed Global Install/);
     assert.match(workflow, /Publish npm Package/);
-    assert.match(workflow, /needs:\s*\[smoke-verify-native\]/);
+    assert.match(workflow, /needs:\s*\[smoke-packed-install\]/);
+    assert.match(workflow, /smoke-packed-install\.mjs --release-assets-dir release-assets/);
     assert.match(workflow, /npm publish --access public --provenance/);
   });
 

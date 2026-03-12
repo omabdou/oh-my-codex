@@ -138,10 +138,28 @@ jobs:
       - name: Verify release archives and manifest
         run: node scripts/verify-native-release-assets.mjs --manifest release-assets/native-release-manifest.json --artifacts-dir release-assets
 
+  smoke-packed-install:
+    name: Smoke Test Packed Global Install
+    runs-on: ubuntu-latest
+    needs: [smoke-verify-native]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-assets
+          path: release-assets
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Smoke test packed install with hydrated native assets
+        run: node scripts/smoke-packed-install.mjs --release-assets-dir release-assets
+
   publish-npm:
     name: Publish npm Package
     runs-on: ubuntu-latest
-    needs: [smoke-verify-native]
+    needs: [smoke-packed-install]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

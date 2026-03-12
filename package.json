@@ -29,6 +29,7 @@
     "test:compat:node": "npm run build && node --test dist/compat/__tests__/*.test.js",
     "test:compat:rust": "cargo build && OMX_COMPAT_TARGET=./target/debug/omx npm run test:compat:node",
     "build:sparkshell": "node scripts/build-sparkshell.mjs",
+    "smoke:packed-install": "node scripts/smoke-packed-install.mjs",
     "test:sparkshell": "node scripts/test-sparkshell.mjs",
     "postpack": "npm run clean:native-package-assets"
   },
@@ -47,6 +48,7 @@
     "templates/",
     "scripts/",
     "scripts/build-sparkshell.mjs",
+    "scripts/smoke-packed-install.mjs",
     "scripts/test-sparkshell.mjs"
   ],
   "keywords": [
