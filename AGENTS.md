@@ -205,9 +205,10 @@ Broad Request Detection:
 A request is broad when it uses vague verbs without targets, names no specific file or function, touches 3+ areas, or is a single sentence without a clear deliverable. For broad work: explore first, then plan if needed.
 
 Command Routing:
-- When `USE_OMX_EXPLORE_CMD` enables advisory routing, prefer `omx explore` for simple read-only repository lookup tasks (files, symbols, patterns, relationships).
+- When `USE_OMX_EXPLORE_CMD` enables advisory routing, prefer `omx explore` as the default surface for simple read-only repository lookup tasks (files, symbols, patterns, relationships).
 - Keep ambiguous, implementation-heavy, edit-heavy, or non-shell-only work on the normal Codex path.
 - If `omx explore` is unavailable or fails, gracefully fall back to the normal path.
+- Let `omx explore` keep direct inspection by default and use `omx sparkshell` only as an adaptive backend for qualifying read-only shell-native tasks.
 - For explicit tmux-pane / worker / leader / HUD inspection, prefer `omx sparkshell --tmux-pane ...` when a larger-tail read or bounded summary is useful. Sparkshell pane mode is explicit opt-in, not always-on.
 
 Parallelization:

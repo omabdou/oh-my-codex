@@ -15,6 +15,7 @@ import {
   parseExploreArgs,
   repoBuiltExploreHarnessCommand,
   resolveExploreHarnessCommand,
+  resolveExploreSparkShellRoute,
   resolvePackagedExploreHarnessCommand,
 } from '../explore.js';
 import { withPackagedExploreHarnessHidden, withPackagedExploreHarnessLock } from './packaged-explore-harness-lock.js';
@@ -88,7 +89,6 @@ async function runExploreCommandForTest(
   process.exitCode = originalExitCode;
   return { stdout: stdoutChunks.join(''), stderr: stderrChunks.join(''), exitCode };
 }
-
 
 async function createExploreTestPath(wd: string): Promise<string> {
   const binDir = join(wd, 'test-bin');
@@ -393,7 +393,62 @@ describe('buildExploreHarnessArgs', () => {
   });
 });
 
+describe('resolveExploreSparkShellRoute', () => {
+  it('keeps natural-language exploration prompts on the direct harness path', () => {
+    assert.equal(resolveExploreSparkShellRoute('which files define team routing'), undefined);
+    assert.equal(resolveExploreSparkShellRoute('map the relationship between hooks and tmux helpers'), undefined);
+  });
+
+  it('routes qualifying read-only git commands to sparkshell', () => {
+    assert.deepEqual(resolveExploreSparkShellRoute('git log --oneline'), {
+      argv: ['git', 'log', '--oneline'],
+      reason: 'long-output',
+    });
+    assert.deepEqual(resolveExploreSparkShellRoute('run git diff --stat'), {
+      argv: ['git', 'diff', '--stat'],
+      reason: 'long-output',
+    });
+  });
+
+  it('rejects non-read-only or shell-unsafe commands for sparkshell routing', () => {
+    assert.equal(resolveExploreSparkShellRoute('git commit -m test'), undefined);
+    assert.equal(resolveExploreSparkShellRoute('npm test'), undefined);
+    assert.equal(resolveExploreSparkShellRoute('git log | head'), undefined);
+    assert.equal(resolveExploreSparkShellRoute('find /tmp -maxdepth 1'), undefined);
+  });
+});
+
 describe('exploreCommand', () => {
+  it('routes qualifying read-only shell commands through sparkshell instead of the direct harness', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-sparkshell-route-'));
+    try {
+      const sparkshellStub = join(wd, 'sparkshell-stub.sh');
+      const harnessStub = join(wd, 'explore-stub.sh');
+      const capturePath = join(wd, 'sparkshell-capture.txt');
+      await writeFile(
+        sparkshellStub,
+        `#!/bin/sh\nprintf '%s\n' "$@" > ${JSON.stringify(capturePath)}\nprintf '# Answer\n- routed via sparkshell\n'\n`,
+      );
+      await writeFile(harnessStub, '#!/bin/sh\nprintf harness-should-not-run\n');
+      await chmod(sparkshellStub, 0o755);
+      await chmod(harnessStub, 0o755);
+
+      const result = runOmx(wd, ['explore', '--prompt', 'git log --oneline'], {
+        OMX_SPARKSHELL_BIN: sparkshellStub,
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+      if (shouldSkipForSpawnPermissions(result.error)) return;
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stdout, '# Answer\n- routed via sparkshell\n');
+      assert.equal(result.stderr, '');
+      const captured = (await readFile(capturePath, 'utf-8')).trim().split('\n');
+      assert.deepEqual(captured, ['git', 'log', '--oneline']);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('passes prompt to harness and preserves markdown stdout', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-cmd-'));
     try {

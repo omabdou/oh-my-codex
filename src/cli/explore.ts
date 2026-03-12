@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { getPackageRoot } from '../utils/package.js';
 import { spawnPlatformCommandSync } from '../utils/platform-command.js';
+import { resolveSparkShellBinaryPath, runSparkShellBinary } from './sparkshell.js';
 import { DEFAULT_FRONTIER_MODEL, getSparkDefaultModel } from '../config/models.js';
 
 export const EXPLORE_USAGE = [
@@ -30,6 +31,110 @@ interface ExploreHarnessMetadata {
   binaryName?: string;
   platform?: string;
   arch?: string;
+}
+
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  'log',
+  'diff',
+  'status',
+  'show',
+  'branch',
+  'rev-parse',
+]);
+
+const SHELL_ROUTE_DISALLOWED_PATTERN = /[|&;><`$()]/;
+const EXPLICIT_SHELL_PREFIX_PATTERN = /^run\s+/i;
+
+export interface ExploreSparkShellRoute {
+  argv: string[];
+  reason: 'shell-native' | 'long-output';
+}
+
+function tokenizeExploreShellCommand(commandText: string): string[] | undefined {
+  const trimmed = commandText.trim();
+  if (!trimmed || SHELL_ROUTE_DISALLOWED_PATTERN.test(trimmed) || trimmed.includes('\\')) return undefined;
+
+  const tokens = trimmed.match(/"[^"]*"|'[^']*'|\S+/g);
+  if (!tokens) return undefined;
+  return tokens.map((token) => {
+    if ((token.startsWith('\"') && token.endsWith('\"')) || (token.startsWith("'") && token.endsWith("'"))) {
+      return token.slice(1, -1);
+    }
+    return token;
+  });
+}
+
+function isReadOnlyGitArgs(args: readonly string[]): boolean {
+  const subcommand = args[1]?.toLowerCase();
+  if (!subcommand || !READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) return false;
+  if (subcommand === 'diff') {
+    return args.some((arg) => /^--(?:stat|name-only|name-status|numstat|shortstat)$/.test(arg));
+  }
+  if (subcommand === 'show') {
+    return args.some((arg) => /^--(?:stat|summary|name-only|name-status)$/.test(arg));
+  }
+  return true;
+}
+
+function classifyLongOutputShellCommand(args: readonly string[]): boolean {
+  const [command, subcommand] = args;
+  if (command === 'git') {
+    return ['log', 'diff', 'status', 'show'].includes((subcommand || '').toLowerCase());
+  }
+  return ['find', 'ls', 'rg', 'grep'].includes(command);
+}
+
+export function resolveExploreSparkShellRoute(prompt: string): ExploreSparkShellRoute | undefined {
+  const explicitShellPrefix = EXPLICIT_SHELL_PREFIX_PATTERN.test(prompt.trim());
+  const normalized = prompt.trim().replace(EXPLICIT_SHELL_PREFIX_PATTERN, '');
+  const argv = tokenizeExploreShellCommand(normalized);
+  if (!argv || argv.length === 0) return undefined;
+
+  const command = argv[0]?.toLowerCase();
+  if (!command) return undefined;
+
+  if (command === 'git' && isReadOnlyGitArgs(argv)) {
+    return {
+      argv,
+      reason: classifyLongOutputShellCommand(argv) ? 'long-output' : 'shell-native',
+    };
+  }
+
+  const shellNativeShape = explicitShellPrefix || argv.slice(1).some((arg) => (
+    arg.startsWith('-')
+    || arg.includes('/')
+    || arg === '.'
+    || arg.includes('*')
+  ));
+
+  if (
+    explicitShellPrefix
+    && shellNativeShape
+    && ['find', 'ls', 'rg', 'grep'].includes(command)
+    && argv.slice(1).every((arg) => !arg.startsWith('/') && !arg.startsWith('..'))
+  ) {
+    return {
+      argv,
+      reason: classifyLongOutputShellCommand(argv) ? 'long-output' : 'shell-native',
+    };
+  }
+
+  return undefined;
+}
+
+function runExploreViaSparkShell(route: ExploreSparkShellRoute, env: NodeJS.ProcessEnv = process.env): void {
+  const binaryPath = resolveSparkShellBinaryPath({ cwd: process.cwd(), env });
+  const result = runSparkShellBinary(binaryPath, route.argv, { cwd: process.cwd(), env });
+
+  if (result.error) {
+    const errno = result.error as NodeJS.ErrnoException;
+    throw new Error(`[explore] failed to launch sparkshell backend: ${errno.message}`);
+  }
+
+  if (result.status !== 0) {
+    process.exitCode = result.status ?? 1;
+  }
 }
 
 export function packagedExploreHarnessBinaryName(platform: NodeJS.Platform = process.platform): string {
@@ -200,6 +305,12 @@ export async function loadExplorePrompt(parsed: ParsedExploreArgs): Promise<stri
 export async function exploreCommand(args: string[]): Promise<void> {
   const parsed = parseExploreArgs(args);
   const prompt = await loadExplorePrompt(parsed);
+  const sparkShellRoute = resolveExploreSparkShellRoute(prompt);
+  if (sparkShellRoute) {
+    runExploreViaSparkShell(sparkShellRoute, process.env);
+    return;
+  }
+
   const packageRoot = getPackageRoot();
   const harness = resolveExploreHarnessCommand(packageRoot, process.env);
   const harnessArgs = [...harness.args, ...buildExploreHarnessArgs(prompt, process.cwd(), process.env, packageRoot)];

@@ -97,7 +97,7 @@ Usage:
   omx doctor --team  Check team/swarm runtime health diagnostics
   omx ask       Ask local provider CLI (claude|gemini) and write artifact output
   omx resume    Resume a previous interactive Codex session
-  omx explore   Run the low-cost read-only exploration harness
+  omx explore   Default read-only exploration entrypoint (may adaptively use sparkshell backend)
   omx session   Search prior local session transcripts and history artifacts
   omx agents-init [path]
                 Bootstrap lightweight AGENTS.md files for a repo/subtree
@@ -112,6 +112,7 @@ Usage:
   omx sparkshell <command> [args...]
   omx sparkshell --tmux-pane <pane-id> [--tail-lines <100-1000>]
                 Run native sparkshell sidecar for direct command execution or explicit tmux-pane summarization
+                (also used as an adaptive backend for qualifying read-only explore tasks)
   omx help      Show this help message
   omx status    Show active modes and state
   omx cancel    Cancel active execution modes

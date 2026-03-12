@@ -213,7 +213,7 @@ omx doctor         # Installation/runtime diagnostics
 omx doctor --team  # Team Mode diagnostics
 omx ask ...        # Ask local provider advisor (claude|gemini), writes .omx/artifacts/*
 omx resume         # Resume a previous interactive Codex session
-omx explore ...    # Run the low-cost read-only exploration harness
+omx explore ...    # Default read-only exploration entrypoint (may use sparkshell backend)
 omx ralph          # Launch Codex with ralph persistence mode active
 omx status         # Show active modes
 omx cancel         # Cancel active execution modes
@@ -245,7 +245,7 @@ omx explore --prompt-file prompts/explore-task.md
 USE_OMX_EXPLORE_CMD=1 omx   # advisory preference for simple read-only exploration prompts
 ```
 
-`omx explore` is intentionally read-only and shell-only. The routing flag only adds advisory steering in generated session instructions; ambiguous or implementation-heavy requests stay on the normal Codex path, and OMX falls back normally if the explore harness is unavailable. The harness constrains Codex through a temporary allowlisted shell/bin layer so only approved repository-inspection command families are available during the offloaded run.
+`omx explore` is the default OMX surface for simple read-only exploration. It stays intentionally read-only and shell-only, and qualifying shell-native read-only tasks may be routed through `omx sparkshell` as a backend when that is the cheaper/more direct fit. The routing flag only adds advisory steering in generated session instructions; ambiguous or implementation-heavy requests stay on the normal Codex path, and OMX falls back normally if the explore harness is unavailable. The harness constrains Codex through a temporary allowlisted shell/bin layer so only approved repository-inspection command families are available during the offloaded run.
 
 - Current shell allowlist: `rg`, `grep`, `ls`, `find`, `wc`, `cat`, `head`, `tail`, `pwd`, `printf`
 - Current shell restrictions: no pipes, redirection, `&&`, `||`, `;`, subshells, path-qualified binaries, non-allowlisted commands, stdin-fed inspection, or path escapes outside the target repository (including existing symlink-resolved escapes)
@@ -285,7 +285,9 @@ See `docs/hooks-extension.md` for the full extension workflow and event model.
 
 ## Sparkshell (preview)
 
-`omx sparkshell <command> [args...]` runs through a JS -> Rust sidecar bridge for fast command execution with adaptive summaries when output exceeds `OMX_SPARKSHELL_LINES`.
+`omx sparkshell <command> [args...]` runs through a JS -> Rust sidecar bridge for fast command execution with adaptive summaries when output exceeds `OMX_SPARKSHELL_LINES`. `omx explore` now treats it as a backend for qualifying read-only shell-native tasks; `omx sparkshell` remains the explicit specialist surface for direct operator use.
+
+It remains an explicit operator-facing command, but OMX may also use it as a backend for qualifying `omx explore` read-only shell-native tasks. That backend relationship does not relax read-only safety: non-read-only or unsupported shell execution should still stay blocked or on the normal path.
 
 Current preview contract:
 - Short output stays raw; long output is summarized into markdown sections limited to `summary:`, `failures:`, and `warnings:`.
