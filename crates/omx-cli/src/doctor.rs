@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::install_paths::{
     InstallScope, ScopeSource, resolve_install_paths, resolve_scope_from_persisted,
 };
-use crate::session_state::{extract_json_bool_field, extract_json_string_field};
+use crate::session_state::extract_json_bool_field;
 
 use omx_process::{CommandSpec, Platform, ProcessBridge, SpawnErrorKind};
 
@@ -137,10 +137,9 @@ fn run_install_doctor(
         }
     );
 
-    let checks = vec![
+    let mut checks = vec![
         check_codex_cli(env),
         check_node_version(env),
-        check_tmux_compat(cwd, env),
         check_directory("Codex home", &paths.codex_home_dir),
         check_config(&paths.codex_config_file)?,
         check_prompts(&paths.prompts_dir, catalog.prompt_min)?,
@@ -149,6 +148,12 @@ fn run_install_doctor(
         check_directory("State dir", &paths.state_dir),
         check_mcp_servers(&paths.codex_config_file)?,
     ];
+
+    // Only include tmux compat status when a local .omx/state exists; keep
+    // onboarding copy stable for first-run templates.
+    if cwd.join(".omx/state").exists() {
+        checks.push(check_tmux_compat(cwd, env));
+    }
 
     let mut pass_count = 0;
     let mut warn_count = 0;
