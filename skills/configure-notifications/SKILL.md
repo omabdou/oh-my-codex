@@ -269,7 +269,8 @@ jq '.notifications.enabled = false' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$
 After writing config, run a smoke check:
 
 ```bash
-npm run build
+cargo test --workspace
+# Optional: npm run build (only for repo-local Node compatibility checks)
 ```
 
 For OpenClaw-like HTTP integrations, verify both:

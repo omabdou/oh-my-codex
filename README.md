@@ -87,6 +87,7 @@ omx team 2:explore "short scoped analysis task"
 ### Platform & tmux
 
 Normal OMX usage, including the native `omx team` path, does not require **tmux**.
+tmux-backed flows are compatibility-only and are DISABLED by default. To enable, set `OMX_COMPAT_TMUX=1` (force-disable with `OMX_NO_TMUX=1`).
 Install tmux only if you use `omx tmux-hook` or other tmux-backed integrations:
 
 | Platform       | tmux provider                                            | Install                |

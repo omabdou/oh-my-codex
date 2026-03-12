@@ -34,9 +34,38 @@ src/hooks/extensibility/
 
 ## Fencing approach (initial)
 - Documentation: this file + README mark tmux/notify surfaces as compatibility-only.
-- Runtime: tmux support is DISABLED by default. Enable explicitly with `OMX_COMPAT_TMUX=1`.
-  - src/notifications/tmux-detector.ts now returns `false` from `isTmuxAvailable()` unless `OMX_COMPAT_TMUX` is truthy.
-- Tests: any JS tests for these surfaces move under a compat-only test lane and are never considered a product gate.
+- Runtime env gates:
+  - DISABLED by default. Enable explicitly with `OMX_COMPAT_TMUX=1|true|yes`.
+  - Force-disable with `OMX_NO_TMUX=1` (overrides any opt-in).
+  - Injection path: `scripts/notify-hook/tmux-injection.js` short-circuits unless opt-in is present; logs `injection_skipped` with reason.
+  - SDK path: `src/hooks/extensibility/sdk.ts`'s `tmux.sendKeys()` requires opt-in and returns `no_backend` when fenced.
+  - Detector path: `src/notifications/tmux-detector.ts` returns `false` from `isTmuxAvailable()` unless `OMX_COMPAT_TMUX` is truthy.
+- Tests: any JS tests for these surfaces live under a compat-only lane and are never a product gate.
+
+### Quick enable/disable
+
+```bash
+# Enable tmux compatibility for this shell
+export OMX_COMPAT_TMUX=1
+
+# Force-disable (takes precedence)
+export OMX_NO_TMUX=1
+```
+
+### Sample .omx/tmux-hook.json
+
+```json
+{
+  "enabled": true,
+  "target": { "type": "pane", "value": "%42" },
+  "allowed_modes": ["ralph", "ultrawork", "team"],
+  "prompt_template": "Continue from current mode state. [OMX_TMUX_INJECT]",
+  "marker": "[OMX_TMUX_INJECT]",
+  "skip_if_scrolling": true
+}
+```
+
+Logs are written under `.omx/logs/` with `notify-hook-YYYY-MM-DD.jsonl` entries.
 
 ## Exit criteria for this lane
 - No tmux/notify JS surface is ambiguously product-authoritative.

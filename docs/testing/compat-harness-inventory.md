@@ -4,7 +4,7 @@
 
 | Asset | Current state | Evidence |
 | --- | --- | --- |
-| Launcher under test | Baseline harness targets the native launcher shim by default, with an override for future Rust binaries via `OMX_COMPAT_TARGET`. | `bin/omx:1-40`, `src/compat/__tests__/cli-baseline-contract.test.ts:15-39` |
+| Launcher under test | Baseline harness targets the native launcher shim by default, with an override for future Rust binaries via `OMX_COMPAT_TARGET`. tmux compatibility is disabled by default; set `OMX_COMPAT_TMUX=1` to exercise tmux-backed paths. | `bin/omx:1-40`, `src/compat/__tests__/cli-baseline-contract.test.ts:15-39` |
 | Harness entrypoint | One black-box test file executes the target and compares exact stdout/stderr/exit code. | `src/compat/__tests__/cli-baseline-contract.test.ts:41-88` |
 | Golden fixtures | Five checked-in fixtures back the current byte-exact baseline: help, version, and ask passthrough stdout/stderr/exit-code. | `src/compat/fixtures/help.stdout.txt`, `src/compat/fixtures/version.stdout.txt`, `src/compat/fixtures/ask/pass-through.*` |
 | Stub dependency | The ask passthrough check already uses a deterministic advisor stub instead of a live provider CLI. | `scripts/fixtures/ask-advisor-stub.js:1-12` |

@@ -95,6 +95,11 @@ SDK surface includes:
 - `sdk.log.info|warn|error(...)`
 - `sdk.state.read|write|delete|all(...)` (plugin namespace scoped)
 
+### tmux backend (compat-only)
+
+The tmux backend is compatibility-only and DISABLED by default. To enable for a session, set `OMX_COMPAT_TMUX=1`. To force-disable, set `OMX_NO_TMUX=1`.
+When the backend is disabled, `sdk.tmux.sendKeys(...)` returns `{ ok: false, reason: 'no_backend' }`.
+
 ## Logs
 
 Plugin dispatch and plugin logs are written to:

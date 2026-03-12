@@ -125,7 +125,7 @@ The gate auto-passes when it detects **any** concrete signal. You do not need al
 | camelCase symbol | `ralph fix processKeywordDetector` | Names a specific function |
 | PascalCase symbol | `ralph update UserModel` | Names a specific class |
 | snake_case symbol | `team fix user_model` | Names a specific identifier |
-| Test runner | `ralph npm test && fix failures` | Has an explicit test target |
+| Test runner | `ralph cargo test --workspace && fix failures` | Has an explicit test target |
 | Numbered steps | `ralph do:\n1. Add X\n2. Test Y` | Structured deliverables |
 | Acceptance criteria | `ralph add login - acceptance criteria: ...` | Explicit success definition |
 | Error reference | `ralph fix TypeError in auth` | Specific error to address |

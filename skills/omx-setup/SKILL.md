@@ -78,6 +78,8 @@ From `omx doctor`, expect:
 - If using local source changes, run build first:
 
 ```bash
+cargo test --workspace
+# Optional: only when validating repo-local Node compatibility path
 npm run build
 ```
 

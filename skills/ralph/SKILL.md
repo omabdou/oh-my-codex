@@ -129,8 +129,8 @@ Why good: Three independent tasks fired simultaneously at appropriate tiers.
 <Good>
 Correct verification before completion:
 ```
-1. Run: npm test           → Output: "42 passed, 0 failed"
-2. Run: npm run build      → Output: "Build succeeded"
+1. Run: cargo test --workspace  → Output: "all workspace tests passed"
+2. Run: npm run test:compat:node (optional compat lane) → Output: "compat checks passed"
 3. Run: lsp_diagnostics    → Output: 0 errors
 4. Delegate to architect at STANDARD tier  → Verdict: "APPROVED"
 5. Run /cancel
