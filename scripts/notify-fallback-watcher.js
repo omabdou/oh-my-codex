@@ -230,7 +230,11 @@ async function runRalphContinueSteerTick() {
     lastRalphContinueSteer = {
       ...lastRalphContinueSteer,
       last_state_check_at: nowIso,
-      last_reason: compatEnabled ? 'env_no_tmu…
+      last_reason: compatEnabled ? 'env_no_tmux' : 'compat_disabled',
+      last_error: null,
+    };
+    return;
+  }
   const activeRalph = await resolveActiveRalphState();
   lastRalphContinueSteer = {
     ...lastRalphContinueSteer,

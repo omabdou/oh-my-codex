@@ -52,6 +52,15 @@ export OMX_COMPAT_TMUX=1
 export OMX_NO_TMUX=1
 ```
 
+### Troubleshooting (why injection may be skipped)
+
+- compat_disabled: `OMX_COMPAT_TMUX` is not set to 1/true/yes.
+- env_no_tmux: `OMX_NO_TMUX=1` or native runtime opted out (`.omx/state/team-state.json` has `no_tmux: true` or `layout_mode: native_equivalent`).
+- scroll_active: target pane is in copy-mode/scrollback; watcher defers injection to avoid disrupting review.
+- agent_not_running: target pane foreground command looks like a shell; injection would land on a bare prompt.
+- cooldown_active / pane_cap_reached: env quotas prevent rapid-fire injections.
+- target_not_found / invalid_target: `tmux-hook.json` target is invalid or the pane no longer exists.
+
 ### Sample .omx/tmux-hook.json
 
 ```json
