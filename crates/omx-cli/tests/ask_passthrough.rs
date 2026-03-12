@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "../src/ask.rs"]
@@ -108,13 +109,19 @@ fn injects_original_task_env_without_rewriting_prompt() {
         &script_path,
         concat!(
             "#!/usr/bin/env node\n",
-            "const prompt = process.argv.slice(3).join(' ');\n",
+            "const prompt = process.argv.slice(2).join(' ');\n",
             "process.stdout.write(`prompt=${prompt}\\n`);\n",
             "process.stderr.write(`original=${process.env.OMX_ASK_ORIGINAL_TASK || ''}\\n`);\n",
             "process.exit(5);\n",
         ),
     )
     .expect("write stub");
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("chmod");
+    }
 
     let env = env_map(&[(
         "OMX_ASK_ADVISOR_SCRIPT",
@@ -139,38 +146,38 @@ fn injects_original_task_env_without_rewriting_prompt() {
 }
 
 #[test]
-fn uses_leader_node_path_when_provided() {
-    let cwd = temp_dir("leader-node");
-    let script_path = cwd.join("argv-check.js");
-    fs::write(&script_path, "process.stdout.write(process.argv[0]);\n").expect("write argv stub");
-
-    let node_path = String::from_utf8(
-        Command::new("node")
-            .arg("-p")
-            .arg("process.execPath")
-            .output()
-            .expect("resolve node exec path")
-            .stdout,
+fn native_default_writes_artifact_without_needing_node() {
+    let cwd = temp_dir("native-default");
+    let fake_bin = cwd.join("bin");
+    fs::create_dir_all(&fake_bin).expect("create fake bin");
+    let provider_path = fake_bin.join("claude");
+    fs::write(
+        &provider_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"CLAUDE_NATIVE_OK:$2\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n",
     )
-    .expect("utf8 node path")
-    .trim()
-    .to_owned();
+    .expect("write provider");
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&provider_path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&provider_path, permissions).expect("chmod");
+    }
 
-    let env = env_map(&[
-        (
-            "OMX_ASK_ADVISOR_SCRIPT",
-            script_path.to_string_lossy().as_ref(),
-        ),
-        ("OMX_LEADER_NODE_PATH", &node_path),
-    ]);
+    let env = env_map(&[("PATH", fake_bin.to_string_lossy().as_ref())]);
+    let result = run_ask(
+        &["claude".to_owned(), "ship".to_owned(), "feature".to_owned()],
+        &cwd,
+        &env,
+    )
+    .expect("run native ask");
 
-    let result = run_ask(&["claude".to_owned(), "check".to_owned()], &cwd, &env)
-        .expect("run ask with leader node path");
-
-    assert_eq!(
-        String::from_utf8(result.stdout).expect("utf8 stdout"),
-        node_path
-    );
-    assert!(result.stderr.is_empty());
     assert_eq!(result.exit_code, 0);
+    assert!(result.stderr.is_empty());
+    let artifact_path = String::from_utf8(result.stdout).expect("utf8 stdout");
+    let artifact_path = artifact_path.trim();
+    assert!(artifact_path.contains("/.omx/artifacts/claude-ship-feature-"));
+    let artifact = fs::read_to_string(artifact_path).expect("read artifact");
+    assert!(artifact.contains("## Original task\n\nship feature"));
+    assert!(artifact.contains("## Final prompt\n\nship feature"));
+    assert!(artifact.contains("CLAUDE_NATIVE_OK:ship feature"));
 }

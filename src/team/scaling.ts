@@ -173,6 +173,9 @@ export async function scaleUp(
 
     const teamStateRoot = config.team_state_root ?? resolveCanonicalTeamStateRoot(leaderCwd);
     const sessionName = config.tmux_session;
+    if (!sessionName) {
+      return { ok: false, error: `Team ${sanitized} does not have an interactive tmux session to scale` };
+    }
     const manifest = await readTeamManifestV2(sanitized, leaderCwd);
     const dispatchPolicy = normalizeTeamPolicy(manifest?.policy, {
       display_mode: manifest?.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
@@ -568,6 +571,9 @@ export async function scaleDown(
     }
 
     const sessionName = config.tmux_session;
+    if (!sessionName) {
+      return { ok: false, error: `Team ${sanitized} does not have an interactive tmux session to scale down` };
+    }
     const removedNames: string[] = [];
 
     // Phase 1: Set workers to 'draining' status

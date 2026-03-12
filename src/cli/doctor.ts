@@ -222,12 +222,20 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
     const configPath = join(teamDir, 'config.json');
 
     let tmuxSession = `omx-team-${teamName}`;
+    let workerLaunchMode: 'interactive' | 'prompt' = 'interactive';
     if (existsSync(manifestPath)) {
       try {
         const raw = await readFile(manifestPath, 'utf-8');
-        const parsed = JSON.parse(raw) as { tmux_session?: string };
+        const parsed = JSON.parse(raw) as {
+          tmux_session?: string | null;
+          runtime_session_id?: string;
+          policy?: { worker_launch_mode?: string };
+        };
+        if (parsed.policy?.worker_launch_mode === 'prompt') workerLaunchMode = 'prompt';
         if (typeof parsed.tmux_session === 'string' && parsed.tmux_session.trim() !== '') {
           tmuxSession = parsed.tmux_session;
+        } else if (typeof parsed.runtime_session_id === 'string' && parsed.runtime_session_id.trim() !== '') {
+          tmuxSession = parsed.runtime_session_id;
         }
       } catch {
         // ignore malformed manifest
@@ -235,19 +243,28 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
     } else if (existsSync(configPath)) {
       try {
         const raw = await readFile(configPath, 'utf-8');
-        const parsed = JSON.parse(raw) as { tmux_session?: string };
+        const parsed = JSON.parse(raw) as {
+          tmux_session?: string | null;
+          runtime_session_id?: string;
+          worker_launch_mode?: string;
+        };
+        if (parsed.worker_launch_mode === 'prompt') workerLaunchMode = 'prompt';
         if (typeof parsed.tmux_session === 'string' && parsed.tmux_session.trim() !== '') {
           tmuxSession = parsed.tmux_session;
+        } else if (typeof parsed.runtime_session_id === 'string' && parsed.runtime_session_id.trim() !== '') {
+          tmuxSession = parsed.runtime_session_id;
         }
       } catch {
         // ignore malformed config
       }
     }
 
-    knownTeamSessions.add(tmuxSession);
+    if (workerLaunchMode === 'interactive') {
+      knownTeamSessions.add(tmuxSession);
+    }
 
     // resume_blocker: only meaningful if tmux is available to query
-    if (!tmuxUnavailable && !tmuxSessions.has(tmuxSession)) {
+    if (workerLaunchMode === 'interactive' && !tmuxUnavailable && !tmuxSessions.has(tmuxSession)) {
       issues.push({
         code: 'resume_blocker',
         message: `${teamName} references missing tmux session ${tmuxSession}`,

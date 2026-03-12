@@ -8,7 +8,7 @@
 
 [![npm version](https://img.shields.io/npm/v/oh-my-codex)](https://www.npmjs.com/package/oh-my-codex)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
+[![Rust-native CLI](https://img.shields.io/badge/runtime-Rust%20native-orange)](./release/native-transition.md)
 
 > **[Website](https://yeachan-heo.github.io/oh-my-codex-website/)** | **[Documentation](https://yeachan-heo.github.io/oh-my-codex-website/docs.html)** | **[CLI Reference](https://yeachan-heo.github.io/oh-my-codex-website/docs.html#cli-reference)** | **[Workflows](https://yeachan-heo.github.io/oh-my-codex-website/docs.html#workflows)** | **[OpenClaw Integration Guide](./docs/openclaw-integration.md)** | **[GitHub](https://github.com/Yeachan-Heo/oh-my-codex)** | **[npm](https://www.npmjs.com/package/oh-my-codex)**
 
@@ -38,7 +38,7 @@ Multi-agent orchestration layer for [OpenAI Codex CLI](https://github.com/openai
 OMX turns Codex from a single-session agent into a coordinated system with:
 - Role prompts (`/prompts:name`) for specialized agents
 - Workflow skills (`$name`) for repeatable execution modes
-- Team orchestration (`omx team`, `$team`) with tmux interactive mode (default) or non-tmux prompt mode
+- Team orchestration (`omx team`, `$team`) with prompt-mode workers as the normal path and tmux-backed flows where explicitly needed
 - Persistent state + memory via MCP servers
 
 ## Why OMX
@@ -54,7 +54,7 @@ OMX is an add-on, not a fork. It uses Codex-native extension points.
 ## Positioning: CLI-first orchestration, MCP-backed state
 
 OMX is best used as an **outer CLI orchestration layer**:
-- **Control plane (CLI/runtime):** `omx team`, tmux workers, lifecycle commands
+- **Control plane (CLI/runtime):** `omx team`, prompt/tmux worker orchestration, lifecycle commands
 - **Capability/state plane (MCP):** task state, mailbox, memory, diagnostics tools
 
 Practical mode split:
@@ -63,7 +63,7 @@ Practical mode split:
 
 Why team mode exists even when ultrawork already exists:
 - Use **ultrawork** when tasks are mostly independent and the leader can merge results afterward.
-- Use **team mode** when the work benefits from shared situational awareness: workers can discover blockers early, hand work across lanes, and keep execution visible through tmux panes plus durable state.
+- Use **team mode** when the work benefits from shared situational awareness: workers can discover blockers early, hand work across lanes, and keep execution visible through durable state, with tmux available only when a live pane workflow is actually needed.
 - Team mode is the better fit for orchestration-heavy or edge-case-heavy work where runtime control, recovery, and inspectability matter as much as raw fanout.
 
 Low-token team profile example:
@@ -76,13 +76,14 @@ omx team 2:explore "short scoped analysis task"
 
 ## Requirements
 
-- Node.js >= 20 (CI validates Node 20 and current LTS, currently Node 22)
 - Codex CLI installed (`npm install -g @openai/codex`)
 - Codex auth configured
+- Node.js >= 20 only if you are using the temporary npm shim or JS-based source/dev workflows
 
 ### Platform & tmux
 
-OMX features like `omx team` require **tmux**:
+Normal OMX usage, including the native `omx team` path, does not require **tmux**.
+Install tmux only if you use `omx tmux-hook` or other tmux-backed integrations:
 
 | Platform       | tmux provider                                            | Install                |
 | -------------- | -------------------------------------------------------- | ---------------------- |
@@ -99,7 +100,7 @@ OMX features like `omx team` require **tmux**:
 
 ### Rust-native release path (cutover target)
 
-For the Rust-native cutover release, install the platform bundle from the release artifacts, add the extracted `omx` binary to your `PATH`, then run:
+**Primary install path:** install the platform-native release bundle, add the extracted `omx` binary to your `PATH`, then run:
 
 ```bash
 omx setup
@@ -108,7 +109,9 @@ omx doctor
 
 If an npm package is still published during the transition, treat it as a **launcher/downloader shim only**. Normal CLI execution should come from the native `omx` binary, not `dist/cli/index.js`.
 
-### Current source / pre-cutover npm flow
+### Transitional npm shim / source-dev flow
+
+Use this only when you are intentionally installing the temporary npm shim or working from source:
 
 ```bash
 npm install -g oh-my-codex
@@ -221,7 +224,7 @@ omx agents-init .  # Bootstrap lightweight AGENTS.md files for a repo/subtree
 omx doctor         # Installation/runtime diagnostics
 omx doctor --team  # Team/swarm diagnostics
 omx ask ...        # Ask local provider advisor (claude|gemini), writes .omx/artifacts/*
-omx team ...       # Start/status/resume/shutdown team workers (interactive tmux by default)
+omx team ...       # Start/status/resume/shutdown team workers (prompt-mode by default; no tmux required)
 omx ralph          # Launch Codex with ralph persistence mode active
 omx status         # Show active modes
 omx cancel         # Cancel active execution modes
@@ -248,7 +251,7 @@ omx ask gemini --agent-prompt=planner --prompt "draft a rollout plan"
 Non-tmux team launch (advanced):
 
 ```bash
-OMX_TEAM_WORKER_LAUNCH_MODE=prompt omx team 2:executor "task"
+omx team 2:executor "task"
 ```
 
 ## Hooks Extension (Additive Surface)

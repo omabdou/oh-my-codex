@@ -1,3 +1,3 @@
 oh-my-codex v0.8.11
-Node.js <NODE_VERSION>
+Node.js optional (not required)
 Platform: linux x64

@@ -24,15 +24,16 @@
 
       <h2>Prerequisites</h2>
       <ul>
-        <li>Node.js 20+ and npm.</li>
         <li>OpenAI Codex CLI installed and authenticated.</li>
+        <li>Node.js 20+ only if you are using the temporary npm shim or JS-based source/dev workflows.</li>
         <li>Git (recommended) for project workflows.</li>
       </ul>
 
       <h2>Installation</h2>
-      <pre><code>npm install -g oh-my-codex
+      <pre><code># primary path: install the native omx bundle and add it to PATH
 omx setup
 omx doctor</code></pre>
+      <p class="muted">If an npm package is still published during transition, use it only as a launcher/downloader shim.</p>
 
       <h2>Recommended Launch</h2>
       <pre><code>omx --xhigh --madmax   # trusted environments
@@ -58,7 +59,7 @@ OMX_MODEL_INSTRUCTIONS_FILE=/path/to/instructions.md omx</code></pre>
       <table>
         <thead><tr><th>Issue</th><th>What to check</th></tr></thead>
         <tbody>
-          <tr><td><code>omx</code> command not found</td><td>Re-run global install and ensure npm global bin is in PATH.</td></tr>
+          <tr><td><code>omx</code> command not found</td><td>Confirm the native <code>omx</code> binary is on <code>PATH</code>, or re-run the temporary npm shim install if that is the path you chose.</td></tr>
           <tr><td>Prompts not available</td><td>Confirm files exist in <code>~/.codex/prompts/</code> and re-run <code>omx setup</code>.</td></tr>
           <tr><td>Skills not loading</td><td>Verify <code>~/.agents/skills/*/SKILL.md</code> files were installed.</td></tr>
           <tr><td>Doctor reports config issues</td><td>Run <code>omx doctor</code> and apply the suggested fixes.</td></tr>

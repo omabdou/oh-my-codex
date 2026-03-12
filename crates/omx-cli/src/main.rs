@@ -150,7 +150,7 @@ fn dispatch_command(
             None,
         ),
         omx_cli::CommandTarget::Hud => dispatch_common_result(
-            omx_cli::hud::run_hud(args, omx_cli::help_output()),
+            omx_cli::hud::run_hud(args, cwd, omx_cli::help_output()),
             |result| (result.stdout, result.stderr, result.exit_code),
             None,
         ),
@@ -160,7 +160,7 @@ fn dispatch_command(
             None,
         ),
         omx_cli::CommandTarget::Launch => dispatch_common_result(
-            omx_cli::launch::run_launch(args, omx_cli::help_output()),
+            omx_cli::launch::run_launch(args, cwd, env, omx_cli::help_output()),
             |result| (result.stdout, result.stderr, result.exit_code),
             None,
         ),

@@ -101,7 +101,7 @@ Usage:
                 Bootstrap lightweight AGENTS.md files for a repo/subtree
   omx deepinit [path]
                 Alias for agents-init (lightweight AGENTS bootstrap only)
-  omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
+  omx team      Start prompt-mode team workers and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)

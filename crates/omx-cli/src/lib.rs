@@ -13,6 +13,7 @@ pub mod session_state;
 pub mod setup;
 pub mod status;
 pub mod team;
+pub mod team_layout;
 pub mod tmux_hook;
 pub mod uninstall;
 
@@ -36,7 +37,7 @@ Usage:
                 Bootstrap lightweight AGENTS.md files for a repo/subtree
   omx deepinit [path]
                 Alias for agents-init (lightweight AGENTS bootstrap only)
-  omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
+  omx team      Start prompt-mode team workers and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
@@ -74,7 +75,6 @@ Options:
   --verbose     Show detailed output
   --scope       Setup scope for "omx setup" only:
                 user | project
-
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,9 +301,8 @@ pub fn help_output() -> &'static str {
 #[must_use]
 pub fn version_output() -> String {
     format!(
-        "oh-my-codex v{}\nNode.js {}\nPlatform: {} {}\n",
+        "oh-my-codex v{}\nNode.js optional (not required)\nPlatform: {} {}\n",
         env!("CARGO_PKG_VERSION"),
-        detect_node_version().unwrap_or_else(|| "v25.1.0".to_string()),
         std::env::consts::OS,
         display_arch(),
     )
@@ -327,38 +326,12 @@ fn display_arch() -> &'static str {
     }
 }
 
-fn detect_node_version() -> Option<String> {
-    use std::process::Command;
-
-    let output = Command::new("node").arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let version = String::from_utf8(output.stdout).ok()?;
-    let trimmed = version.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         BINARY_NAME, CliAction, CommandTarget, command_matrix, help_output, parse_args,
         version_output,
     };
-
-    fn normalize_version_output(text: &str) -> String {
-        text.replace(
-            text.lines()
-                .find(|line| line.starts_with("Node.js "))
-                .unwrap_or("Node.js unknown"),
-            "Node.js <NODE_VERSION>",
-        )
-    }
 
     #[test]
     fn exposes_expected_binary_name() {
@@ -567,7 +540,7 @@ mod tests {
     #[test]
     fn matches_version_fixture_in_current_environment() {
         assert_eq!(
-            normalize_version_output(&version_output()),
+            version_output(),
             include_str!("../../../src/compat/fixtures/version.stdout.txt")
         );
     }

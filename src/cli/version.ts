@@ -8,7 +8,7 @@ export function version(): void {
     const pkgPath = join(dirname(__filename), '..', '..', 'package.json');
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
     console.log(`oh-my-codex v${pkg.version}`);
-    console.log(`Node.js ${process.version}`);
+    console.log('Node.js optional (not required)');
     console.log(`Platform: ${process.platform} ${process.arch}`);
   } catch {
     console.log('oh-my-codex (version unknown)');

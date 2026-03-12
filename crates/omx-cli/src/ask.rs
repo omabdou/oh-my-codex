@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const ASK_USAGE: &str = concat!(
     "Usage: omx ask <claude|gemini> <question or task>\n",
@@ -16,8 +18,6 @@ pub const ASK_USAGE: &str = concat!(
 
 const ASK_ADVISOR_SCRIPT_ENV: &str = "OMX_ASK_ADVISOR_SCRIPT";
 const ASK_ORIGINAL_TASK_ENV: &str = "OMX_ASK_ORIGINAL_TASK";
-const OMX_LEADER_NODE_PATH_ENV: &str = "OMX_LEADER_NODE_PATH";
-const NPM_NODE_EXECPATH_ENV: &str = "npm_node_execpath";
 const ASK_AGENT_PROMPT_FLAG: &str = "--agent-prompt";
 const SAFE_ROLE_PATTERN: &str = "abcdefghijklmnopqrstuvwxyz0123456789-";
 
@@ -62,8 +62,7 @@ pub struct AskExecution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskRuntime {
     pub package_root: PathBuf,
-    pub advisor_script_path: PathBuf,
-    pub node_program: OsString,
+    pub advisor_command_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,24 +194,24 @@ pub fn resolve_ask_advisor_script_path(
     }
 }
 
+fn resolve_ask_advisor_command_path(
+    package_root: &Path,
+    env: &BTreeMap<OsString, OsString>,
+) -> Option<PathBuf> {
+    let path = resolve_ask_advisor_script_path(package_root, env);
+    path.is_file().then_some(path)
+}
+
 #[allow(clippy::missing_errors_doc)]
 pub fn resolve_ask_runtime(
     cwd: &Path,
     env: &BTreeMap<OsString, OsString>,
 ) -> Result<AskRuntime, AskError> {
     let package_root = resolve_package_root(cwd)?;
-    let advisor_script_path = resolve_ask_advisor_script_path(&package_root, env);
-    if !advisor_script_path.is_file() {
-        return Err(AskError::runtime(format!(
-            "[ask] advisor script not found: {}",
-            advisor_script_path.display()
-        )));
-    }
-
+    let advisor_command_path = resolve_ask_advisor_command_path(&package_root, env);
     Ok(AskRuntime {
         package_root,
-        advisor_script_path,
-        node_program: resolve_node_program(env),
+        advisor_command_path,
     })
 }
 
@@ -233,28 +232,18 @@ pub fn run_ask(
         None => parsed.prompt.clone(),
     };
 
-    let mut command = Command::new(&runtime.node_program);
-    command
-        .current_dir(cwd)
-        .arg(&runtime.advisor_script_path)
-        .arg(parsed.provider.as_str())
-        .arg(&final_prompt)
-        .envs(env.iter())
-        .env(ASK_ORIGINAL_TASK_ENV, &parsed.prompt);
+    if env.contains_key(OsStr::new(ASK_ADVISOR_SCRIPT_ENV)) {
+        return run_advisor_override(&runtime, &parsed, &final_prompt, cwd, env);
+    }
 
-    let output = command.output().map_err(|error| {
-        AskError::runtime(format!("[ask] failed to launch advisor script: {error}"))
-    })?;
-
-    Ok(AskExecution {
-        stdout: output.stdout,
-        stderr: output.stderr,
-        exit_code: exit_code_from_status(output.status),
-    })
+    run_native_provider(&parsed, &final_prompt, cwd, env)
 }
 
 fn resolve_ask_prompts_dir(cwd: &Path, env: &BTreeMap<OsString, OsString>) -> PathBuf {
-    if let Some(codex_home) = env.get(OsStr::new("CODEX_HOME")).filter(|value| !value.is_empty()) {
+    if let Some(codex_home) = env
+        .get(OsStr::new("CODEX_HOME"))
+        .filter(|value| !value.is_empty())
+    {
         return PathBuf::from(codex_home).join("prompts");
     }
 
@@ -278,9 +267,7 @@ fn resolve_ask_prompts_dir(cwd: &Path, env: &BTreeMap<OsString, OsString>) -> Pa
 fn resolve_agent_prompt_content(role: &str, prompts_dir: &Path) -> Result<String, AskError> {
     let normalized = role.trim().to_ascii_lowercase();
     if normalized.is_empty()
-        || !normalized
-            .chars()
-            .all(|ch| SAFE_ROLE_PATTERN.contains(ch))
+        || !normalized.chars().all(|ch| SAFE_ROLE_PATTERN.contains(ch))
         || !normalized
             .chars()
             .next()
@@ -342,18 +329,6 @@ fn resolve_agent_prompt_content(role: &str, prompts_dir: &Path) -> Result<String
     Ok(trimmed.to_string())
 }
 
-fn resolve_node_program(env: &BTreeMap<OsString, OsString>) -> OsString {
-    env.get(OsStr::new(OMX_LEADER_NODE_PATH_ENV))
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .or_else(|| {
-            env.get(OsStr::new(NPM_NODE_EXECPATH_ENV))
-                .filter(|value| !value.is_empty())
-                .cloned()
-        })
-        .unwrap_or_else(|| OsString::from("node"))
-}
-
 fn resolve_package_root(cwd: &Path) -> Result<PathBuf, AskError> {
     if let Ok(current_exe) = std::env::current_exe()
         && let Some(found) = find_package_root(current_exe.as_path())
@@ -413,6 +388,250 @@ fn extract_json_string_field(raw: &str, key: &str) -> Option<String> {
 
 fn exit_code_from_status(status: ExitStatus) -> i32 {
     status.code().unwrap_or_else(|| signal_exit_code(status))
+}
+
+fn run_advisor_override(
+    runtime: &AskRuntime,
+    parsed: &ParsedAskArgs,
+    final_prompt: &str,
+    cwd: &Path,
+    env: &BTreeMap<OsString, OsString>,
+) -> Result<AskExecution, AskError> {
+    let Some(command_path) = runtime.advisor_command_path.as_ref() else {
+        return Err(AskError::runtime(format!(
+            "[ask] advisor script not found: {}",
+            resolve_ask_advisor_script_path(&runtime.package_root, env).display()
+        )));
+    };
+
+    let output = run_command_capture(
+        command_path.as_os_str(),
+        &[parsed.provider.as_str(), final_prompt],
+        cwd,
+        env,
+        &[(ASK_ORIGINAL_TASK_ENV, parsed.prompt.as_str())],
+    )
+    .map_err(|error| {
+        AskError::runtime(format!(
+            "[ask] failed to launch advisor script: {error}"
+        ))
+    })?;
+
+    Ok(AskExecution {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: exit_code_from_status(output.status),
+    })
+}
+
+fn run_native_provider(
+    parsed: &ParsedAskArgs,
+    final_prompt: &str,
+    cwd: &Path,
+    env: &BTreeMap<OsString, OsString>,
+) -> Result<AskExecution, AskError> {
+    ensure_provider_available(parsed.provider, cwd, env)?;
+
+    let output = run_command_capture(
+        OsStr::new(parsed.provider.as_str()),
+        &["-p", final_prompt],
+        cwd,
+        env,
+        &[(ASK_ORIGINAL_TASK_ENV, parsed.prompt.as_str())],
+    )
+    .map_err(|error| AskError::runtime(format!("[ask-{}] {}", parsed.provider.as_str(), error)))?;
+
+    let exit_code = exit_code_from_status(output.status);
+    let raw_output = render_raw_output(&output.stdout, &output.stderr);
+    let artifact_path = write_advisor_artifact(
+        cwd,
+        parsed.provider,
+        &parsed.prompt,
+        final_prompt,
+        &raw_output,
+        exit_code,
+    )?;
+
+    Ok(AskExecution {
+        stdout: format!("{}\n", artifact_path.display()).into_bytes(),
+        stderr: Vec::new(),
+        exit_code,
+    })
+}
+
+fn ensure_provider_available(
+    provider: AskProvider,
+    cwd: &Path,
+    env: &BTreeMap<OsString, OsString>,
+) -> Result<(), AskError> {
+    match run_command_capture(
+        OsStr::new(provider.as_str()),
+        &["--version"],
+        cwd,
+        env,
+        &[],
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(AskError::runtime(format!(
+            "[ask-{}] Missing required local CLI binary: {}\n[ask-{}] Install/configure {} CLI, then verify with: {} --version",
+            provider.as_str(),
+            provider.as_str(),
+            provider.as_str(),
+            provider.as_str(),
+            provider.as_str()
+        ))),
+        Err(error) => Err(AskError::runtime(format!(
+            "[ask-{}] failed to probe provider CLI: {error}",
+            provider.as_str()
+        ))),
+    }
+}
+
+fn run_command_capture(
+    program: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    env: &BTreeMap<OsString, OsString>,
+    extra_env: &[(&str, &str)],
+) -> io::Result<Output> {
+    let mut command = Command::new(program);
+    command.current_dir(cwd).args(args).envs(env.iter());
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command.output()
+}
+
+fn render_raw_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout).to_string();
+    let stderr = String::from_utf8_lossy(stderr).to_string();
+    match (stdout.trim_end().is_empty(), stderr.trim_end().is_empty()) {
+        (false, false) => format!("{}\n\n{}", stdout.trim_end(), stderr.trim_end()),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (true, true) => String::new(),
+    }
+}
+
+fn write_advisor_artifact(
+    cwd: &Path,
+    provider: AskProvider,
+    original_task: &str,
+    final_prompt: &str,
+    raw_output: &str,
+    exit_code: i32,
+) -> Result<PathBuf, AskError> {
+    let artifact_dir = cwd.join(".omx").join("artifacts");
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        AskError::runtime(format!(
+            "[ask-{}] failed to create artifact directory {}: {error}",
+            provider.as_str(),
+            artifact_dir.display()
+        ))
+    })?;
+
+    let artifact_path = artifact_dir.join(format!(
+        "{}-{}-{}.md",
+        provider.as_str(),
+        slugify(original_task),
+        timestamp_token()
+    ));
+    let body = build_artifact_body(provider, original_task, final_prompt, raw_output, exit_code);
+    fs::write(&artifact_path, body).map_err(|error| {
+        AskError::runtime(format!(
+            "[ask-{}] failed to write artifact {}: {error}",
+            provider.as_str(),
+            artifact_path.display()
+        ))
+    })?;
+    Ok(artifact_path)
+}
+
+fn build_artifact_body(
+    provider: AskProvider,
+    original_task: &str,
+    final_prompt: &str,
+    raw_output: &str,
+    exit_code: i32,
+) -> String {
+    let summary = if exit_code == 0 {
+        "Provider completed successfully. Review the raw output for details.".to_string()
+    } else {
+        raw_output
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(|line| format!("Provider command failed (exit {exit_code}): {line}"))
+            .unwrap_or_else(|| format!("Provider command failed with exit code {exit_code}."))
+    };
+    let action_items = if exit_code == 0 {
+        [
+            "Review the response and extract decisions you want to apply.",
+            "Capture follow-up implementation tasks if needed.",
+        ]
+    } else {
+        [
+            "Inspect the raw output error details.",
+            "Fix CLI/auth/environment issues and rerun the command.",
+        ]
+    };
+
+    format!(
+        concat!(
+            "# {} advisor artifact\n\n",
+            "- Provider: {}\n",
+            "- Exit code: {}\n",
+            "- Created at: {}\n\n",
+            "## Original task\n\n{}\n\n",
+            "## Final prompt\n\n{}\n\n",
+            "## Raw output\n\n```text\n{}\n```\n\n",
+            "## Concise summary\n\n{}\n\n",
+            "## Action items\n\n- {}\n- {}\n"
+        ),
+        provider.as_str(),
+        provider.as_str(),
+        exit_code,
+        iso_timestamp(),
+        original_task,
+        final_prompt,
+        if raw_output.is_empty() { "(no output)" } else { raw_output },
+        summary,
+        action_items[0],
+        action_items[1],
+    )
+}
+
+fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in value.chars().flat_map(|ch| ch.to_lowercase()) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let mut slug = if slug.is_empty() {
+        "task".to_string()
+    } else {
+        slug.to_string()
+    };
+    slug.truncate(60);
+    slug.trim_matches('-').to_string()
+}
+
+fn timestamp_token() -> String {
+    iso_timestamp().replace(':', "-").replace('.', "-")
+}
+
+fn iso_timestamp() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}.{:03}Z", now.as_secs(), now.subsec_millis())
 }
 
 #[cfg(unix)]

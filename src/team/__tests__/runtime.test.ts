@@ -875,6 +875,9 @@ process.on('SIGTERM', () => process.exit(0));
         ));
 
       assert.equal(runtime.config.worker_launch_mode, 'prompt');
+      assert.equal(runtime.config.runtime_session_id, 'prompt-team-prompt');
+      assert.equal(runtime.config.tmux_session, null);
+      assert.equal(runtime.sessionName, 'prompt-team-prompt');
       assert.equal(runtime.config.leader_pane_id, null);
       assert.equal((runtime.config.workers[0]?.pid ?? 0) > 0, true);
 
@@ -2121,7 +2124,8 @@ esac
       const configPath = join(cwd, '.omx', 'state', 'team', 'team-prompt-resume', 'config.json');
       const config = JSON.parse(await readFile(configPath, 'utf-8')) as any;
       config.worker_launch_mode = 'prompt';
-      config.tmux_session = 'prompt-team-prompt-resume';
+      config.runtime_session_id = 'prompt-team-prompt-resume';
+      config.tmux_session = null;
       config.leader_pane_id = null;
       config.hud_pane_id = null;
       config.workers[0].pid = sleeperPid;

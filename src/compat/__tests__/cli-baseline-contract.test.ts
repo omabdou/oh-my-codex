@@ -21,10 +21,6 @@ function readFixture(relativePath: string): string {
   return readFileSync(join(fixturesRoot, relativePath), 'utf-8');
 }
 
-function normalizeVersionOutput(text: string): string {
-  return text.replace(/^Node\.js .+$/m, 'Node.js <NODE_VERSION>');
-}
-
 function shouldSkipForSpawnPermissions(err?: string): boolean {
   return typeof err === 'string' && /(EPERM|EACCES)/i.test(err);
 }
@@ -83,7 +79,7 @@ describe('compat baseline contract', () => {
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(result.stderr, '');
-    assert.equal(normalizeVersionOutput(result.stdout), readFixture('version.stdout.txt'));
+    assert.equal(result.stdout, readFixture('version.stdout.txt'));
   });
 
   it('preserves ask stdout stderr and exit code exactly', () => {

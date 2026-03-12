@@ -1,0 +1,30 @@
+{
+  "id": "setup-project-artifacts",
+  "command": ["setup", "--scope", "project"],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Using setup scope: project",
+      "Generated AGENTS.md in project root."
+    ],
+    "stderr": ""
+  },
+  "artifact_assertions": [
+    ".codex/prompts exists",
+    ".agents/skills exists",
+    ".codex/config.toml exists",
+    ".omx/agents exists",
+    ".omx/agents/executor.toml exists",
+    ".agents/skills/omx-setup/SKILL.md exists",
+    ".agents/skills/ask-claude/SKILL.md exists",
+    ".agents/skills/ask-gemini/SKILL.md exists",
+    "AGENTS.md exists",
+    ".codex/config.toml contains .omx/agents/executor.toml",
+    "AGENTS.md contains ./.codex/prompts",
+    "AGENTS.md contains ./.agents/skills",
+    ".omx/setup-scope.json json scope=project"
+  ],
+  "source_contracts": [
+    "src/cli/__tests__/setup-scope.test.ts:project scope writes prompts/skills/config/native-agents under cwd"
+  ]
+}

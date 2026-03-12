@@ -1935,7 +1935,7 @@ export function buildLeaderMonitoringHints(teamName: string): string[] {
 
 async function renderStartSummary(runtime: TeamRuntime, staffingPlan?: FollowupStaffingPlan): Promise<void> {
   console.log(`Team started: ${runtime.teamName}`);
-  console.log(`tmux target: ${runtime.sessionName}`);
+  console.log(`runtime target: ${runtime.sessionName}`);
   console.log(`workers: ${runtime.config.worker_count}`);
   console.log(`agent_type: ${runtime.config.agent_type}`);
   if (staffingPlan) {

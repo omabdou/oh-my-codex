@@ -23,7 +23,9 @@
         <span class="badge">GitHub Pages</span>
         <h1>oh-my-codex</h1>
         <p>Multi-agent orchestration for OpenAI Codex CLI.</p>
-        <pre><code>npm install -g oh-my-codex</code></pre>
+        <pre><code># primary path: install the native omx bundle
+omx setup
+omx doctor</code></pre>
       </section>
 
       <section aria-labelledby="whats-new-060">
@@ -67,11 +69,12 @@
 
       <h2>Quick Start</h2>
       <ol>
-        <li><code>npm install -g oh-my-codex</code></li>
+        <li>Install the native <code>omx</code> bundle for your platform and add it to <code>PATH</code>.</li>
         <li><code>omx setup</code></li>
         <li><code>omx doctor</code></li>
         <li><code>omx --xhigh --madmax</code> (trusted environments) or <code>omx</code></li>
       </ol>
+      <p class="muted">If an npm package is still published during transition, treat it as a launcher/downloader shim only.</p>
 
       <h2>Integration Guides</h2>
       <p>OpenClaw / notification gateway setup and prompt-tuning guides by language:</p>

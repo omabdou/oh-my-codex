@@ -1,0 +1,17 @@
+{
+  "id": "setup-dry-run-project",
+  "command": ["setup", "--scope", "project", "--dry-run"],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Using setup scope: project"
+    ],
+    "stderr": ""
+  },
+  "artifact_assertions": [
+    ".omx/setup-scope.json absent"
+  ],
+  "source_contracts": [
+    "src/cli/__tests__/setup-scope.test.ts:does not persist setup scope on --dry-run"
+  ]
+}

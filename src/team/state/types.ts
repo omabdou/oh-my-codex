@@ -10,7 +10,8 @@ export interface TeamConfig {
   max_workers: number;
   workers: WorkerInfo[];
   created_at: string;
-  tmux_session: string;
+  runtime_session_id: string;
+  tmux_session: string | null;
   next_task_id: number;
   leader_cwd?: string;
   team_state_root?: string;
@@ -156,7 +157,8 @@ export interface TeamManifestV2 {
   policy: TeamPolicy;
   governance: TeamGovernance;
   permissions_snapshot: PermissionsSnapshot;
-  tmux_session: string;
+  runtime_session_id: string;
+  tmux_session: string | null;
   worker_count: number;
   workers: WorkerInfo[];
   next_task_id: number;

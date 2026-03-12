@@ -15,6 +15,16 @@ import {
   writeWorkerStatus,
 } from '../../team/state.js';
 
+async function withoutTeamWorkerEnv<T>(fn: () => T | Promise<T>): Promise<T> {
+  const previousWorker = process.env.OMX_TEAM_WORKER;
+  delete process.env.OMX_TEAM_WORKER;
+  try {
+    return await fn();
+  } finally {
+    if (typeof previousWorker === 'string') process.env.OMX_TEAM_WORKER = previousWorker;
+  }
+}
+
 describe('parseTeamStartArgs', () => {
   it('parses default team start args without worktree', () => {
     const result = parseTeamStartArgs(['2:executor', 'build', 'feature']);
@@ -1418,7 +1428,7 @@ process.on('SIGTERM', () => process.exit(0));
         return true;
       }) as typeof process.stderr.write;
 
-      await teamCommand(['1:executor', teamTask]);
+      await withoutTeamWorkerEnv(() => teamCommand(['1:executor', teamTask]));
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       logs.length = 0;

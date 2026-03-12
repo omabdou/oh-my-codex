@@ -41,6 +41,25 @@ The remaining cutover risk is therefore no longer top-level command visibility. 
 
 So the active review target is no longer “can Rust parse these commands?” but “does the shipped product and the deeper runtime behavior actually make Rust the authority?”
 
+## Branch snapshot for the tmux-free team-runtime lane
+
+As of this branch snapshot, the Rust `team` surface has moved from pure placeholder status into an early deterministic slice:
+
+- `crates/omx-cli/src/team.rs` now owns `omx team --help`, `omx team api --help`, and `omx team status <team-name>` in native Rust.
+- `team status` reads `.omx/state/team/<team-name>` snapshots and renders phase / worker / task counts without shelling out to the TypeScript runtime.
+- The Rust help text already advertises the expanded API operation list, including `read-events` and `await-event`, matching the current TypeScript command surface.
+
+Important review finding: the native runtime now covers the deterministic state-backed team slice: concrete `omx team api <operation>` handlers, `team status` summarization, and lifecycle/state commands such as `await`, `resume`, and `shutdown` all land inside the Rust path for layers 1-2. Release-facing docs should describe the native prompt/no-tmux normal path as shipped for this branch slice while keeping live tmux launch/orchestration parity explicitly in-progress.
+
+Implication for the PRD/test-spec lane:
+
+- **Completed in this slice:** deterministic help coverage, native `team api` execution, state-backed `team status` summarization, and lifecycle/state handlers (`await`, `resume`, `shutdown`).
+- **Still required for full parity:** Stage 5C live tmux launch/orchestration, readiness waiting, nudges, HUD lifecycle, and other live worker controls.
+- **Newly landed in the state-backed slice:** native Rust now implements `read-idle-state`, `read-stall-state`, and `get-summary`, in addition to the broader `team api`/lifecycle surface above.
+- **Review follow-up:** keep `crates/omx-cli/tests/team_contract.rs` aligned with semantic persisted-state assertions for the state-backed slice; do not let those tests overclaim Stage 5C live orchestration parity.
+- **Review note on unrelated diffs:** the concurrent `ask.rs` and `setup.rs` edits in this snapshot are formatting-only and do not appear to widen runtime scope. Final parity reporting should either exclude them from the slice or split them into a separate cleanup-only change.
+- **Documentation rule:** when referencing “team parity” in review notes or release handoff text, distinguish **surface visibility** from **operational parity** so reviewers do not mistake help-text parity for runtime completion.
+
 ## Runtime surface inventory
 
 ### 1. Team CLI surface
@@ -168,7 +187,7 @@ Higher-flake/live slice:
 
 ## Documentation / release gaps to close during cutover review
 
-1. **Install docs must stay aligned with the landing artifact.** `README.md` now distinguishes native-bundle install from the pre-cutover npm flow, but translated READMEs and release notes will need the same treatment once the launcher contract is final.
+1. **Install docs must stay aligned with the landing artifact.** `README.md` now distinguishes native-bundle install from the pre-cutover npm flow and documents the native prompt/no-tmux `team` path, but translated READMEs and release notes will need the same treatment.
 2. **Package metadata still keeps a transitional wrapper in the shipped path today.** The runtime authority has moved off `dist/cli/index.js`, but npm/package flows still rely on a launcher wrapper and JS-based dev/test flows.
 3. **Release docs need a strict wording contract.** `release/native-transition.md` now spells out that install/update docs must treat npm as a shim only during transition, but those rules still need to be reflected in release notes and setup/update guidance.
 4. **Runtime handoff docs must distinguish dispatch coverage from operational parity.** Rust owns the top-level command routing, while deeper runtime semantics still require validation against the TypeScript source-of-truth.

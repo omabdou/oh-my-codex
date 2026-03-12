@@ -69,7 +69,8 @@ export interface TeamConfig {
   max_workers: number; // default 20, configurable up to 20
   workers: WorkerInfo[];
   created_at: string;
-  tmux_session: string; // "omx-team-{name}"
+  runtime_session_id: string;
+  tmux_session: string | null; // "omx-team-{name}" for interactive tmux runs only
   next_task_id: number;
   leader_cwd?: string;
   team_state_root?: string;
@@ -157,13 +158,6 @@ export interface TeamPolicy {
   worker_launch_mode: 'interactive' | 'prompt';
   dispatch_mode: 'hook_preferred_with_fallback' | 'transport_direct';
   dispatch_ack_timeout_ms: number;
-}
-
-/**
- * Lifecycle/workflow guardrails persisted alongside the manifest, but kept
- * separate from transport/runtime policy so each layer has a single owner.
- */
-export interface TeamGovernance {
   delegation_only: boolean;
   plan_approval_required: boolean;
   nested_teams_allowed: boolean;
@@ -222,9 +216,9 @@ export interface TeamManifestV2 {
   task: string;
   leader: TeamLeader;
   policy: TeamPolicy;
-  governance: TeamGovernance;
   permissions_snapshot: PermissionsSnapshot;
-  tmux_session: string;
+  runtime_session_id: string;
+  tmux_session: string | null;
   worker_count: number;
   workers: WorkerInfo[];
   next_task_id: number;
@@ -344,10 +338,7 @@ export interface TeamSummaryPerformance {
 export const DEFAULT_MAX_WORKERS = 20;
 export const ABSOLUTE_MAX_WORKERS = 20;
 const LOCK_STALE_MS = 5 * 60 * 1000;
-// Hook-preferred delivery can wait for the fallback watcher tick plus tmux
-// injection verification; keep the default ack budget above that steady-state
-// control-plane cadence to avoid spurious fallback/failed confirmations.
-const DEFAULT_DISPATCH_ACK_TIMEOUT_MS = 2_000;
+const DEFAULT_DISPATCH_ACK_TIMEOUT_MS = 800;
 const MIN_DISPATCH_ACK_TIMEOUT_MS = 100;
 const MAX_DISPATCH_ACK_TIMEOUT_MS = 10_000;
 
@@ -400,11 +391,6 @@ function defaultPolicy(
     worker_launch_mode: workerLaunchMode,
     dispatch_mode: 'hook_preferred_with_fallback',
     dispatch_ack_timeout_ms: DEFAULT_DISPATCH_ACK_TIMEOUT_MS,
-  };
-}
-
-function defaultGovernance(): TeamGovernance {
-  return {
     delegation_only: false,
     plan_approval_required: false,
     nested_teams_allowed: false,
@@ -430,24 +416,17 @@ export function normalizeTeamPolicy(
     : 'hook_preferred_with_fallback';
 
   return {
+    ...base,
+    ...(policy ?? {}),
     worker_launch_mode: policy?.worker_launch_mode === 'prompt' ? 'prompt' : base.worker_launch_mode,
     display_mode: policy?.display_mode === 'split_pane' ? 'split_pane' : base.display_mode,
     dispatch_mode: dispatchMode,
     dispatch_ack_timeout_ms: clampDispatchAckTimeoutMs(policy?.dispatch_ack_timeout_ms),
-  };
-}
-
-export function normalizeTeamGovernance(
-  governance: Partial<TeamGovernance> | null | undefined,
-  legacyPolicy: Partial<TeamGovernance> | null | undefined = null,
-): TeamGovernance {
-  const source = governance ?? legacyPolicy ?? {};
-  return {
-    delegation_only: source?.delegation_only === true,
-    plan_approval_required: source?.plan_approval_required === true,
-    nested_teams_allowed: source?.nested_teams_allowed === true,
-    one_team_per_leader_session: source?.one_team_per_leader_session !== false,
-    cleanup_requires_all_workers_inactive: source?.cleanup_requires_all_workers_inactive !== false,
+    delegation_only: policy?.delegation_only === true,
+    plan_approval_required: policy?.plan_approval_required === true,
+    nested_teams_allowed: policy?.nested_teams_allowed === true,
+    one_team_per_leader_session: policy?.one_team_per_leader_session !== false,
+    cleanup_requires_all_workers_inactive: policy?.cleanup_requires_all_workers_inactive !== false,
   };
 }
 
@@ -651,7 +630,10 @@ function isTeamManifestV2(value: unknown): value is TeamManifestV2 {
   if (v.schema_version !== 2) return false;
   if (typeof v.name !== 'string') return false;
   if (typeof v.task !== 'string') return false;
-  if (typeof v.tmux_session !== 'string') return false;
+  const hasRuntimeSessionId = typeof v.runtime_session_id === 'string';
+  const hasLegacyTmuxSession = typeof v.tmux_session === 'string';
+  if (!hasRuntimeSessionId && !hasLegacyTmuxSession) return false;
+  if (!(typeof v.tmux_session === 'string' || v.tmux_session === null || v.tmux_session === undefined)) return false;
   if (typeof v.worker_count !== 'number') return false;
   if (typeof v.next_task_id !== 'number') return false;
   if (typeof v.created_at !== 'string') return false;
@@ -664,6 +646,30 @@ function isTeamManifestV2(value: unknown): value is TeamManifestV2 {
   if (!v.policy || typeof v.policy !== 'object') return false;
   if (!v.permissions_snapshot || typeof v.permissions_snapshot !== 'object') return false;
   return true;
+}
+
+function defaultRuntimeSessionId(teamName: string, workerLaunchMode: TeamConfig['worker_launch_mode']): string {
+  return workerLaunchMode === 'prompt' ? `prompt-${teamName}` : `omx-team-${teamName}`;
+}
+
+function normalizeTmuxSession(
+  raw: unknown,
+  teamName: string,
+  workerLaunchMode: TeamConfig['worker_launch_mode'],
+): string | null {
+  if (typeof raw === 'string' && raw.trim() !== '') return raw.trim();
+  return workerLaunchMode === 'interactive' ? `omx-team-${teamName}` : null;
+}
+
+function normalizeRuntimeSessionId(
+  raw: unknown,
+  tmuxSession: string | null,
+  teamName: string,
+  workerLaunchMode: TeamConfig['worker_launch_mode'],
+): string {
+  if (typeof raw === 'string' && raw.trim() !== '') return raw.trim();
+  if (typeof tmuxSession === 'string' && tmuxSession.trim() !== '') return tmuxSession.trim();
+  return defaultRuntimeSessionId(teamName, workerLaunchMode);
 }
 
 // Atomic write: write to {path}.tmp.{pid}, then rename
@@ -754,7 +760,8 @@ export async function initTeamState(
     max_workers: maxWorkers,
     workers,
     created_at: new Date().toISOString(),
-    tmux_session: `omx-team-${teamName}`,
+    runtime_session_id: defaultRuntimeSessionId(teamName, workerLaunchMode),
+    tmux_session: workerLaunchMode === 'interactive' ? `omx-team-${teamName}` : null,
     next_task_id: 1,
     leader_cwd: workspace.leader_cwd,
     team_state_root: workspace.team_state_root,
@@ -789,8 +796,8 @@ export async function initTeamState(
         worker_id: leaderWorkerId,
       },
       policy: defaultPolicy(displayMode, workerLaunchMode),
-      governance: defaultGovernance(),
       permissions_snapshot: permissionsSnapshot,
+      runtime_session_id: config.runtime_session_id,
       tmux_session: config.tmux_session,
       worker_count: workerCount,
       workers,
@@ -821,6 +828,7 @@ async function writeConfig(cfg: TeamConfig, cwd: string): Promise<void> {
     const merged: TeamManifestV2 = {
       ...existing,
       task: normalized.task,
+      runtime_session_id: normalized.runtime_session_id,
       tmux_session: normalized.tmux_session,
       worker_count: normalized.worker_count,
       workers: normalized.workers,
@@ -853,7 +861,13 @@ function teamConfigFromManifest(manifest: TeamManifestV2): TeamConfig {
     max_workers: DEFAULT_MAX_WORKERS,
     workers: manifest.workers,
     created_at: manifest.created_at,
-    tmux_session: manifest.tmux_session,
+    runtime_session_id: normalizeRuntimeSessionId(
+      manifest.runtime_session_id,
+      manifest.tmux_session,
+      manifest.name,
+      workerLaunchMode,
+    ),
+    tmux_session: normalizeTmuxSession(manifest.tmux_session, manifest.name, workerLaunchMode),
     next_task_id: manifest.next_task_id,
     leader_cwd: manifest.leader_cwd,
     team_state_root: manifest.team_state_root,
@@ -868,8 +882,16 @@ function teamConfigFromManifest(manifest: TeamManifestV2): TeamConfig {
 
 function normalizeTeamConfig(config: TeamConfig): TeamConfig {
   const workerLaunchMode = config.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive';
+  const tmuxSession = normalizeTmuxSession(config.tmux_session, config.name, workerLaunchMode);
   return {
     ...config,
+    runtime_session_id: normalizeRuntimeSessionId(
+      config.runtime_session_id,
+      tmuxSession,
+      config.name,
+      workerLaunchMode,
+    ),
+    tmux_session: tmuxSession,
     leader_pane_id: config.leader_pane_id ?? null,
     hud_pane_id: config.hud_pane_id ?? null,
     resize_hook_name: config.resize_hook_name ?? null,
@@ -895,8 +917,8 @@ function teamManifestFromConfig(config: TeamConfig): TeamManifestV2 {
     task: normalized.task,
     leader: defaultLeader(),
     policy,
-    governance: defaultGovernance(),
     permissions_snapshot: defaultPermissionsSnapshot(),
+    runtime_session_id: normalized.runtime_session_id,
     tmux_session: normalized.tmux_session,
     worker_count: normalized.worker_count,
     workers: normalized.workers,
@@ -918,18 +940,20 @@ export async function writeTeamManifestV2(manifest: TeamManifestV2, cwd: string)
     display_mode: manifest.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
     worker_launch_mode: manifest.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
   });
-  const normalizedGovernance = normalizeTeamGovernance(
-    manifest.governance,
-    manifest.policy as Partial<TeamGovernance>,
-  );
   const p = teamManifestV2Path(manifest.name, cwd);
   await writeAtomic(
     p,
     JSON.stringify(
       {
         ...manifest,
+        runtime_session_id: normalizeRuntimeSessionId(
+          manifest.runtime_session_id,
+          normalizeTmuxSession(manifest.tmux_session, manifest.name, normalizedPolicy.worker_launch_mode),
+          manifest.name,
+          normalizedPolicy.worker_launch_mode,
+        ),
+        tmux_session: normalizeTmuxSession(manifest.tmux_session, manifest.name, normalizedPolicy.worker_launch_mode),
         policy: normalizedPolicy,
-        governance: normalizedGovernance,
       },
       null,
       2,
@@ -944,17 +968,23 @@ export async function readTeamManifestV2(teamName: string, cwd: string): Promise
     const raw = await readFile(p, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (!isTeamManifestV2(parsed)) return null;
-    const parsedManifest = parsed as TeamManifestV2 & {
-      policy?: Partial<TeamPolicy> & Partial<TeamGovernance>;
-      governance?: Partial<TeamGovernance>;
-    };
     return {
-      ...parsedManifest,
-      policy: normalizeTeamPolicy(parsedManifest.policy, {
-        display_mode: parsedManifest.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
-        worker_launch_mode: parsedManifest.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
+      ...parsed,
+      runtime_session_id: normalizeRuntimeSessionId(
+        parsed.runtime_session_id,
+        normalizeTmuxSession(parsed.tmux_session, parsed.name, parsed.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive'),
+        parsed.name,
+        parsed.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
+      ),
+      tmux_session: normalizeTmuxSession(
+        parsed.tmux_session,
+        parsed.name,
+        parsed.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
+      ),
+      policy: normalizeTeamPolicy(parsed.policy, {
+        display_mode: parsed.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
+        worker_launch_mode: parsed.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
       }),
-      governance: normalizeTeamGovernance(parsedManifest.governance, parsedManifest.policy),
     };
   } catch {
     return null;

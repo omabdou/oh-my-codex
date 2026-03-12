@@ -287,8 +287,14 @@ fn materialize_setup_artifacts(
 
     write_file(dirs.prompts_dir.join("executor.md"), "# executor\n")?;
     write_file(dirs.skills_dir.join("omx-setup/SKILL.md"), "# omx-setup\n")?;
-    write_file(dirs.skills_dir.join("ask-claude/SKILL.md"), "# ask-claude\n")?;
-    write_file(dirs.skills_dir.join("ask-gemini/SKILL.md"), "# ask-gemini\n")?;
+    write_file(
+        dirs.skills_dir.join("ask-claude/SKILL.md"),
+        "# ask-claude\n",
+    )?;
+    write_file(
+        dirs.skills_dir.join("ask-gemini/SKILL.md"),
+        "# ask-gemini\n",
+    )?;
     write_file(
         dirs.native_agents_dir.join("executor.toml"),
         "name = \"executor\"\n",
@@ -296,7 +302,7 @@ fn materialize_setup_artifacts(
     write_file(
         &dirs.codex_config_file,
         &format!(
-            "omx_enabled = true\n[agents.executor]\nconfig_file = \"{}\"\n[mcp_servers.omx_state]\ncommand = \"node\"\n",
+            "omx_enabled = true\n[agents.executor]\nconfig_file = \"{}\"\n",
             dirs.native_agents_dir.join("executor.toml").display()
         ),
     )?;
@@ -410,6 +416,10 @@ mod tests {
             fs::read_to_string(cwd.join(".omx/setup-scope.json")).expect("scope file"),
             "{\"scope\":\"user\"}\n"
         );
+        let config = fs::read_to_string(PathBuf::from("/tmp/home/.codex/config.toml"))
+            .expect("config file");
+        assert!(config.contains("[agents.executor]"));
+        assert!(!config.contains("[mcp_servers.omx_state]"));
     }
 
     #[test]

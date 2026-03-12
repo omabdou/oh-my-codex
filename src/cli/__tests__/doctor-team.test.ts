@@ -71,6 +71,33 @@ describe('omx doctor --team', () => {
     }
   });
 
+  it('does not emit resume_blocker for prompt-mode teams without tmux sessions', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-team-'));
+    try {
+      const teamRoot = join(wd, '.omx', 'state', 'team', 'prompty');
+      await mkdir(join(teamRoot, 'workers', 'worker-1'), { recursive: true });
+      await writeFile(join(teamRoot, 'config.json'), JSON.stringify({
+        name: 'prompty',
+        worker_launch_mode: 'prompt',
+        runtime_session_id: 'prompt-prompty',
+        tmux_session: null,
+      }));
+
+      const fakeBin = join(wd, 'bin');
+      await mkdir(fakeBin, { recursive: true });
+      const tmuxPath = join(fakeBin, 'tmux');
+      await writeFile(tmuxPath, '#!/bin/sh\n# list-sessions success with no sessions\nexit 0\n');
+      spawnSync('chmod', ['+x', tmuxPath], { encoding: 'utf-8' });
+
+      const res = runOmx(wd, ['doctor', '--team'], { PATH: `${fakeBin}:${process.env.PATH || ''}` });
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      assert.doesNotMatch(res.stdout, /resume_blocker/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('prints slow_shutdown when shutdown request is stale and ack missing', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-team-'));
     try {

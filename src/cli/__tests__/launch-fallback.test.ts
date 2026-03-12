@@ -13,15 +13,16 @@ function runOmx(
 ): { status: number | null; stdout: string; stderr: string; error: string } {
   const testDir = dirname(fileURLToPath(import.meta.url));
   const repoRoot = join(testDir, '..', '..', '..');
-  const omxBin = join(repoRoot, 'bin', 'omx.js');
-  const result = spawnSync(process.execPath, [omxBin, ...argv], {
-    cwd,
-    encoding: 'utf-8',
-    env: {
-      ...process.env,
-      ...envOverrides,
-    },
-  });
+  const omxEntry = join(repoRoot, 'dist', 'cli', 'index.js');
+    const runner = `import(${JSON.stringify(omxEntry)}).then(async ({ main }) => { await main(process.argv.slice(1)); }).catch((error) => { console.error(error); process.exit(1); });`;
+  const result = spawnSync(process.execPath, ['-e', runner, '--', ...argv], {
+      cwd,
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        ...envOverrides,
+      },
+    });
   return {
     status: result.status,
     stdout: result.stdout || '',

@@ -324,8 +324,8 @@ fn check_node_version(env: &BTreeMap<OsString, OsString>) -> Check {
     if result.status_code != Some(0) {
         return Check {
             name: "Node.js",
-            status: CheckStatus::Fail,
-            message: "not found (need >= 20)".to_string(),
+            status: CheckStatus::Warn,
+            message: "not found (optional; only needed for transitional JS flows)".to_string(),
         };
     }
 
@@ -344,13 +344,13 @@ fn check_node_version(env: &BTreeMap<OsString, OsString>) -> Check {
         },
         Some(_) => Check {
             name: "Node.js",
-            status: CheckStatus::Fail,
-            message: format!("{version} (need >= 20)"),
+            status: CheckStatus::Warn,
+            message: format!("{version} (optional; JS-based flows expect >= 20)"),
         },
         None => Check {
             name: "Node.js",
-            status: CheckStatus::Fail,
-            message: format!("{version} (unable to parse major version)"),
+            status: CheckStatus::Warn,
+            message: format!("{version} (optional; unable to parse major version)"),
         },
     }
 }
@@ -551,14 +551,21 @@ fn collect_team_doctor_issues(
 
     for team_name in &team_dirs {
         let team_dir = teams_root.join(team_name);
-        let tmux_session =
-            read_team_tmux_session(&team_dir).unwrap_or_else(|| format!("omx-team-{team_name}"));
-        known_team_sessions.insert(tmux_session.clone());
+        let team_runtime = read_team_runtime_metadata(&team_dir, team_name);
+        let session_id = team_runtime
+            .session_id
+            .unwrap_or_else(|| format!("omx-team-{team_name}"));
+        if team_runtime.worker_launch_mode != Some("prompt".to_string()) {
+            known_team_sessions.insert(session_id.clone());
+        }
 
-        if !tmux_unavailable && !tmux_sessions.contains(&tmux_session) {
+        if team_runtime.worker_launch_mode != Some("prompt".to_string())
+            && !tmux_unavailable
+            && !tmux_sessions.contains(&session_id)
+        {
             issues.push(TeamDoctorIssue {
                 code: "resume_blocker",
-                message: format!("{team_name} references missing tmux session {tmux_session}"),
+                message: format!("{team_name} references missing tmux session {session_id}"),
                 severity: CheckStatus::Fail,
             });
         }
@@ -701,20 +708,39 @@ fn list_team_tmux_sessions(env: &BTreeMap<OsString, OsString>) -> Option<BTreeSe
     )
 }
 
-fn read_team_tmux_session(team_dir: &Path) -> Option<String> {
+struct TeamRuntimeMetadata {
+    worker_launch_mode: Option<String>,
+    session_id: Option<String>,
+}
+
+fn read_team_runtime_metadata(team_dir: &Path, team_name: &str) -> TeamRuntimeMetadata {
     for file_name in ["manifest.v2.json", "config.json"] {
         let path = team_dir.join(file_name);
         if !path.exists() {
             continue;
         }
-        if let Ok(raw) = fs::read_to_string(path)
-            && let Some(value) = extract_json_string_field(&raw, "tmux_session")
-            && !value.trim().is_empty()
-        {
-            return Some(value);
+        if let Ok(raw) = fs::read_to_string(path) {
+            let worker_launch_mode =
+                extract_json_string_field(&raw, "worker_launch_mode").or_else(|| {
+                    raw.find("\"worker_launch_mode\"")
+                        .and_then(|_| extract_json_string_field(&raw, "worker_launch_mode"))
+                });
+            let session_id = extract_json_string_field(&raw, "tmux_session")
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    extract_json_string_field(&raw, "runtime_session_id")
+                        .filter(|value| !value.trim().is_empty())
+                });
+            return TeamRuntimeMetadata {
+                worker_launch_mode,
+                session_id,
+            };
         }
     }
-    None
+    TeamRuntimeMetadata {
+        worker_launch_mode: None,
+        session_id: Some(format!("omx-team-{team_name}")),
+    }
 }
 
 fn dedupe_issues(issues: Vec<TeamDoctorIssue>) -> Vec<TeamDoctorIssue> {
@@ -1056,6 +1082,46 @@ mod tests {
         let stdout = String::from_utf8(execution.stdout).expect("utf8 stdout");
         assert_eq!(execution.exit_code, 0);
         assert!(!stdout.contains("resume_blocker"));
+    }
+
+    #[test]
+    fn omits_resume_blocker_for_prompt_mode_team_without_tmux_session() {
+        let wd = temp_dir("prompt-no-tmux");
+        let team_root = wd.join(".omx/state/team/prompty");
+        fs::create_dir_all(team_root.join("workers/worker-1")).expect("worker dir");
+        fs::write(
+            team_root.join("config.json"),
+            r#"{"name":"prompty","worker_launch_mode":"prompt","runtime_session_id":"prompt-prompty","tmux_session":null}"#,
+        )
+        .expect("write config");
+
+        let fake_bin = wd.join("bin");
+        fs::create_dir_all(&fake_bin).expect("fake bin");
+        let tmux_path = fake_bin.join("tmux");
+        fs::write(&tmux_path, "#!/bin/sh\nexit 0\n").expect("write tmux stub");
+        make_executable(&tmux_path);
+
+        let path = format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let execution = run_doctor(&["--team".to_string()], &wd, &env_map(&[("PATH", &path)]))
+            .expect("run doctor");
+        let stdout = String::from_utf8(execution.stdout).expect("utf8 stdout");
+        assert_eq!(execution.exit_code, 0);
+        assert!(!stdout.contains("resume_blocker"));
+    }
+
+    #[test]
+    fn install_doctor_only_warns_when_node_is_missing() {
+        let wd = temp_dir("install-no-node");
+        let execution = run_doctor(&[], &wd, &env_map(&[("PATH", "")])).expect("run doctor");
+        let stdout = String::from_utf8(execution.stdout).expect("utf8 stdout");
+        assert_eq!(execution.exit_code, 0);
+        assert!(stdout.contains(
+            "[!!] Node.js: not found (optional; only needed for transitional JS flows)"
+        ));
     }
 
     #[test]

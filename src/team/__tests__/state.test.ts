@@ -76,6 +76,7 @@ describe('team state', () => {
       assert.equal(diskCfg.agent_type, 'executor');
       assert.equal(diskCfg.worker_count, 2);
       assert.equal(diskCfg.max_workers, DEFAULT_MAX_WORKERS);
+      assert.equal(diskCfg.runtime_session_id, 'omx-team-team-1');
       assert.equal(diskCfg.tmux_session, 'omx-team-team-1');
       assert.equal(diskCfg.leader_pane_id, null);
       assert.equal(diskCfg.hud_pane_id, null);
@@ -84,6 +85,33 @@ describe('team state', () => {
       assert.equal(typeof diskCfg.next_task_id, 'number');
       assert.ok(Array.isArray(diskCfg.workers));
       assert.equal(diskCfg.workers.length, 2);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('initTeamState uses runtime-neutral session fields for prompt launch mode', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-state-prompt-'));
+    try {
+      const cfg = await initTeamState(
+        'team-prompt',
+        'do prompt stuff',
+        'executor',
+        1,
+        cwd,
+        DEFAULT_MAX_WORKERS,
+        { ...process.env, OMX_TEAM_WORKER_LAUNCH_MODE: 'prompt' },
+      );
+
+      const root = join(cwd, '.omx', 'state', 'team', 'team-prompt');
+      const diskCfg = JSON.parse(readFileSync(join(root, 'config.json'), 'utf8')) as Record<string, unknown>;
+      const manifest = JSON.parse(readFileSync(join(root, 'manifest.v2.json'), 'utf8')) as Record<string, unknown>;
+
+      assert.equal(cfg.worker_launch_mode, 'prompt');
+      assert.equal(diskCfg.runtime_session_id, 'prompt-team-prompt');
+      assert.equal(diskCfg.tmux_session, null);
+      assert.equal(manifest.runtime_session_id, 'prompt-team-prompt');
+      assert.equal(manifest.tmux_session, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
