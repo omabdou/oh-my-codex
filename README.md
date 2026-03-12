@@ -330,6 +330,7 @@ omx sparkshell --tmux-pane %12 --tail-lines 400
 ```
 
 - tmux pane mode captures a larger pane tail (100-1000 lines) and applies the same raw-vs-summary behavior to worker/leader pane context.
+- `--tmux-pane` is an operator-only compatibility inspection aid; it is not part of the native product control plane.
 - sparkshell pane summarization is not always-on; it is enabled only when explicitly requested.
 
 Preview build helpers:
