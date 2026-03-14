@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsString;
-use std::fs::{create_dir_all, read_dir, read_to_string, remove_dir_all, write};
-use std::io::{self, Read};
+use std::fs::{create_dir_all, read_dir, read_to_string, remove_dir_all, write, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread::sleep;
@@ -41,10 +41,24 @@ struct RuntimeMonitorSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeTaskStatus {
+    id: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TaskResult {
     task_id: String,
     status: String,
     summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeTaskStateRecord {
+    id: String,
+    status: String,
+    requires_code_change: bool,
+    result: String,
 }
 
 pub fn run_runtime(args: &[String]) -> Result<(), String> {
@@ -770,32 +784,40 @@ fn iso_timestamp() -> String {
 }
 
 fn monitor_team(input: &RuntimeRunInput) -> Result<Option<RuntimeMonitorSnapshot>, String> {
+    let monitor_started = Instant::now();
     let team_dir = team_dir(&input.team_name, &input.cwd);
     if !team_dir.exists() {
         return Ok(None);
     }
 
-    let task_statuses = list_task_statuses(&input.team_name, &input.cwd);
-    let pending = task_statuses
+    reclaim_expired_task_claims(&input.team_name, &input.cwd)?;
+    let task_states = list_task_states(&input.team_name, &input.cwd);
+    let pending = task_states
         .iter()
-        .filter(|status| status.as_str() == "pending")
+        .filter(|task| task.status.as_str() == "pending")
         .count();
-    let blocked = task_statuses
+    let blocked = task_states
         .iter()
-        .filter(|status| status.as_str() == "blocked")
+        .filter(|task| task.status.as_str() == "blocked")
         .count();
-    let in_progress = task_statuses
+    let in_progress = task_states
         .iter()
-        .filter(|status| status.as_str() == "in_progress")
+        .filter(|task| task.status.as_str() == "in_progress")
         .count();
-    let completed = task_statuses
+    let completed = task_states
         .iter()
-        .filter(|status| status.as_str() == "completed")
+        .filter(|task| task.status.as_str() == "completed")
         .count();
-    let failed = task_statuses
+    let failed = task_states
         .iter()
-        .filter(|status| status.as_str() == "failed")
+        .filter(|task| task.status.as_str() == "failed")
         .count();
+
+    let verification_pending = task_states.iter().any(|task| {
+        task.status == "completed"
+            && task.requires_code_change
+            && !has_structured_verification_evidence(&task.result)
+    });
 
     let worker_infos = list_worker_infos(&input.team_name, &input.cwd);
     let dead_workers = worker_infos
@@ -810,6 +832,8 @@ fn monitor_team(input: &RuntimeRunInput) -> Result<Option<RuntimeMonitorSnapshot
 
     let phase = if dead_worker_stall {
         "failed".to_string()
+    } else if all_tasks_terminal && verification_pending {
+        "team-verify".to_string()
     } else if all_tasks_terminal && failed == 0 {
         "complete".to_string()
     } else if all_tasks_terminal && failed > 0 {
@@ -818,7 +842,30 @@ fn monitor_team(input: &RuntimeRunInput) -> Result<Option<RuntimeMonitorSnapshot
         "team-exec".to_string()
     };
 
+    let monitor_ms = monitor_started.elapsed().as_millis() as usize;
+    let task_statuses = task_states
+        .iter()
+        .map(|task| RuntimeTaskStatus {
+            id: task.id.clone(),
+            status: task.status.clone(),
+        })
+        .collect::<Vec<_>>();
     write_phase_state(&input.team_name, &input.cwd, &phase, failed == 0)?;
+    write_monitor_snapshot(
+        &input.team_name,
+        &input.cwd,
+        &task_statuses,
+        &worker_infos,
+        &collect_mailbox_notified_map(&input.team_name, &input.cwd),
+        monitor_ms,
+    )?;
+    sync_root_team_mode_state_on_terminal_phase(&input.team_name, &phase, &input.cwd)?;
+    sync_linked_ralph_mode_state_on_terminal_phase(
+        &input.team_name,
+        &phase,
+        &input.cwd,
+        &iso_timestamp(),
+    )?;
 
     Ok(Some(RuntimeMonitorSnapshot {
         phase,
@@ -827,7 +874,7 @@ fn monitor_team(input: &RuntimeRunInput) -> Result<Option<RuntimeMonitorSnapshot
         completed,
         failed,
         dead_workers,
-        monitor_ms: 0,
+        monitor_ms,
     }))
 }
 
@@ -868,32 +915,72 @@ fn shutdown_team(team_name: &str, cwd: &str, force: bool, ralph: bool) -> Result
     let statuses = list_task_statuses(team_name, cwd);
     let pending = statuses
         .iter()
-        .filter(|status| status.as_str() == "pending")
+        .filter(|status| status.status.as_str() == "pending")
         .count();
     let blocked = statuses
         .iter()
-        .filter(|status| status.as_str() == "blocked")
+        .filter(|status| status.status.as_str() == "blocked")
         .count();
     let in_progress = statuses
         .iter()
-        .filter(|status| status.as_str() == "in_progress")
+        .filter(|status| status.status.as_str() == "in_progress")
         .count();
     let failed = statuses
         .iter()
-        .filter(|status| status.as_str() == "failed")
+        .filter(|status| status.status.as_str() == "failed")
         .count();
 
     if !force {
         let has_active_work = pending > 0 || blocked > 0 || in_progress > 0;
         if has_active_work || (failed > 0 && !ralph) {
+            let _ = append_team_event(
+                team_name,
+                cwd,
+                "shutdown_gate",
+                "leader-fixed",
+                &format!(
+                    "allowed=false pending={pending} blocked={blocked} in_progress={in_progress} failed={failed}"
+                ),
+            );
             return Err(format!(
                 "shutdown_gate_blocked:pending={pending},blocked={blocked},in_progress={in_progress},failed={failed}"
             ));
         }
     }
+    if force {
+        let _ = append_team_event(
+            team_name,
+            cwd,
+            "shutdown_gate_forced",
+            "leader-fixed",
+            "force_bypass",
+        );
+    }
 
     let config_path = team_dir(team_name, cwd).join("config.json");
     if let Ok(raw) = read_to_string(&config_path) {
+        for worker_name in extract_worker_names(&raw) {
+            let requested_at = iso_timestamp();
+            let _ =
+                write_shutdown_request(team_name, &worker_name, "leader-fixed", cwd, &requested_at);
+            if let Some(ack) = read_shutdown_ack(team_name, &worker_name, cwd, Some(&requested_at))
+            {
+                let reason = ack
+                    .reason
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "no_reason".to_string());
+                let event_reason = if ack.status == "reject" {
+                    format!("reject:{reason}")
+                } else {
+                    "accept".to_string()
+                };
+                let _ =
+                    append_team_event(team_name, cwd, "shutdown_ack", &worker_name, &event_reason);
+                if ack.status == "reject" && !force {
+                    return Err(format!("shutdown_rejected:{worker_name}:{reason}"));
+                }
+            }
+        }
         for pane_id in extract_object_string_values(&raw, "pane_id") {
             let _ = kill_tmux_pane(&pane_id);
         }
@@ -907,6 +994,31 @@ fn shutdown_team(team_name: &str, cwd: &str, force: bool, ralph: bool) -> Result
         }
     }
 
+    if ralph {
+        let _ = append_team_event(
+            team_name,
+            cwd,
+            "ralph_cleanup_summary",
+            "leader-fixed",
+            &format!(
+                "total={} completed={} failed={} pending={} force={force}",
+                statuses.len(),
+                statuses
+                    .iter()
+                    .filter(|status| status.status == "completed")
+                    .count(),
+                failed,
+                pending,
+            ),
+        );
+        sync_linked_ralph_mode_state_on_terminal_phase(
+            team_name,
+            "cancelled",
+            cwd,
+            &iso_timestamp(),
+        )?;
+    }
+
     let team_root = team_dir(team_name, cwd);
     if team_root.exists() {
         remove_dir_all(&team_root).map_err(|err| format!("cleanupTeamState failed: {err}"))?;
@@ -918,6 +1030,10 @@ fn shutdown_team(team_name: &str, cwd: &str, force: bool, ralph: bool) -> Result
 struct WorkerMonitorInfo {
     name: String,
     alive: bool,
+    pane_id: Option<String>,
+    state: String,
+    turn_count: u64,
+    current_task_id: String,
 }
 
 fn team_dir(team_name: &str, cwd: &str) -> PathBuf {
@@ -928,17 +1044,133 @@ fn team_dir(team_name: &str, cwd: &str) -> PathBuf {
         .join(team_name)
 }
 
-fn list_task_statuses(team_name: &str, cwd: &str) -> Vec<String> {
+fn list_task_states(team_name: &str, cwd: &str) -> Vec<RuntimeTaskStateRecord> {
     let tasks_dir = team_dir(team_name, cwd).join("tasks");
     let Ok(entries) = read_dir(tasks_dir) else {
         return Vec::new();
     };
 
-    entries
+    let mut tasks = entries
         .flatten()
-        .filter_map(|entry| read_to_string(entry.path()).ok())
-        .filter_map(|raw| extract_json_string(&raw, "status"))
+        .filter_map(|entry| {
+            let path = entry.path();
+            let raw = read_to_string(&path).ok()?;
+            let id = extract_json_string(&raw, "id").or_else(|| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().replace("task-", ""))
+            })?;
+            let status = extract_json_string(&raw, "status")?;
+            let requires_code_change =
+                extract_json_bool(&raw, "requires_code_change").unwrap_or(false);
+            let result = extract_json_string(&raw, "result")
+                .or_else(|| extract_json_string(&raw, "summary"))
+                .unwrap_or_default();
+            Some(RuntimeTaskStateRecord {
+                id,
+                status,
+                requires_code_change,
+                result,
+            })
+        })
+        .collect::<Vec<_>>();
+    tasks.sort_by(|left, right| left.id.cmp(&right.id));
+    tasks
+}
+
+fn list_task_statuses(team_name: &str, cwd: &str) -> Vec<RuntimeTaskStatus> {
+    list_task_states(team_name, cwd)
+        .into_iter()
+        .map(|task| RuntimeTaskStatus {
+            id: task.id,
+            status: task.status,
+        })
         .collect()
+}
+
+fn reclaim_expired_task_claims(team_name: &str, cwd: &str) -> Result<(), String> {
+    let tasks_dir = team_dir(team_name, cwd).join("tasks");
+    let Ok(entries) = read_dir(tasks_dir) else {
+        return Ok(());
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(raw) = read_to_string(&path) else {
+            continue;
+        };
+        let Some(status) = extract_json_string(&raw, "status") else {
+            continue;
+        };
+        if status != "in_progress" {
+            continue;
+        }
+        let Some(leased_until) = extract_json_string(&raw, "leased_until") else {
+            continue;
+        };
+        if !iso_timestamp_is_expired(&leased_until) {
+            continue;
+        }
+
+        let Some(id) = extract_json_string(&raw, "id").or_else(|| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().replace("task-", ""))
+        }) else {
+            continue;
+        };
+        let version = extract_json_number(&raw, "version").unwrap_or(1) + 1;
+        let subject = extract_json_string(&raw, "subject").unwrap_or_default();
+        let description = extract_json_string(&raw, "description").unwrap_or_default();
+        let created_at = extract_json_string(&raw, "created_at").unwrap_or_else(iso_timestamp);
+
+        write(
+            &path,
+            format!(
+                "{{\"id\":{},\"subject\":{},\"description\":{},\"status\":\"pending\",\"depends_on\":[],\"version\":{},\"created_at\":{}}}\n",
+                json_string(&id),
+                json_string(&subject),
+                json_string(&description),
+                version,
+                json_string(&created_at),
+            ),
+        )
+        .map_err(|err| format!("failed reclaiming expired task claim: {err}"))?;
+    }
+
+    Ok(())
+}
+
+fn iso_timestamp_is_expired(value: &str) -> bool {
+    if value.trim().is_empty() {
+        return false;
+    }
+    let now = iso_timestamp();
+    value <= now.as_str()
+}
+
+fn has_structured_verification_evidence(summary: &str) -> bool {
+    let text = summary.trim();
+    if text.is_empty() {
+        return false;
+    }
+
+    let lowercase = text.to_ascii_lowercase();
+    let has_verification_section = lowercase.contains("verification:")
+        || lowercase.contains("verification evidence:")
+        || lowercase.contains("## verification");
+    if !has_verification_section {
+        return false;
+    }
+
+    lowercase.contains("pass")
+        || lowercase.contains("passed")
+        || lowercase.contains("fail")
+        || lowercase.contains("failed")
+        || text.contains('`')
+        || lowercase.contains("command")
+        || lowercase.contains("test")
+        || lowercase.contains("build")
+        || lowercase.contains("typecheck")
+        || lowercase.contains("lint")
 }
 
 fn list_worker_infos(team_name: &str, cwd: &str) -> Vec<WorkerMonitorInfo> {
@@ -960,18 +1192,502 @@ fn list_worker_infos(team_name: &str, cwd: &str) -> Vec<WorkerMonitorInfo> {
             continue;
         };
         let identity_raw = read_to_string(path.join("identity.json")).unwrap_or_default();
+        let status_raw = read_to_string(path.join("status.json")).unwrap_or_default();
+        let heartbeat_raw = read_to_string(path.join("heartbeat.json")).unwrap_or_default();
         let pane_id = extract_json_string(&identity_raw, "pane_id");
         let pid = extract_json_number(&identity_raw, "pid");
-        let alive = if let Some(pane_id) = pane_id {
+        let alive = if let Some(ref pane_id) = pane_id {
             is_tmux_pane_alive(&pane_id)
         } else if let Some(pid) = pid {
             is_pid_alive(pid as i32)
         } else {
             false
         };
-        workers.push(WorkerMonitorInfo { name, alive });
+        let state =
+            extract_json_string(&status_raw, "state").unwrap_or_else(|| "unknown".to_string());
+        let current_task_id =
+            extract_json_string(&status_raw, "current_task_id").unwrap_or_default();
+        let turn_count = extract_json_number(&heartbeat_raw, "turn_count").unwrap_or(0);
+        workers.push(WorkerMonitorInfo {
+            name,
+            alive,
+            pane_id,
+            state,
+            turn_count,
+            current_task_id,
+        });
     }
     workers
+}
+
+fn write_monitor_snapshot(
+    team_name: &str,
+    cwd: &str,
+    task_statuses: &[RuntimeTaskStatus],
+    worker_infos: &[WorkerMonitorInfo],
+    mailbox_notified: &str,
+    monitor_ms: usize,
+) -> Result<(), String> {
+    let previous_snapshot_raw =
+        read_to_string(team_dir(team_name, cwd).join("monitor-snapshot.json")).unwrap_or_default();
+    let previous_mailbox_notified =
+        extract_json_object_body(&previous_snapshot_raw, "mailboxNotifiedByMessageId")
+            .unwrap_or_default();
+    let previous_completed_event_task_ids =
+        extract_json_object_body(&previous_snapshot_raw, "completedEventTaskIds")
+            .unwrap_or_default();
+    let merged_mailbox_notified =
+        merge_json_object_entries(&previous_mailbox_notified, mailbox_notified);
+
+    let task_status_by_id = task_statuses
+        .iter()
+        .map(|task| format!("{}:{}", json_string(&task.id), json_string(&task.status)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let worker_alive_by_name = worker_infos
+        .iter()
+        .map(|worker| {
+            format!(
+                "{}:{}",
+                json_string(&worker.name),
+                if worker.alive { "true" } else { "false" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let worker_state_by_name = worker_infos
+        .iter()
+        .map(|worker| {
+            format!(
+                "{}:{}",
+                json_string(&worker.name),
+                json_string(&worker.state)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let worker_turn_count_by_name = worker_infos
+        .iter()
+        .map(|worker| format!("{}:{}", json_string(&worker.name), worker.turn_count))
+        .collect::<Vec<_>>()
+        .join(",");
+    let worker_task_id_by_name = worker_infos
+        .iter()
+        .map(|worker| {
+            format!(
+                "{}:{}",
+                json_string(&worker.name),
+                json_string(&worker.current_task_id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let updated_at = iso_timestamp();
+    let snapshot = format!(
+        "{{\"taskStatusById\":{{{}}},\"workerAliveByName\":{{{}}},\"workerStateByName\":{{{}}},\"workerTurnCountByName\":{{{}}},\"workerTaskIdByName\":{{{}}},\"mailboxNotifiedByMessageId\":{{{}}},\"completedEventTaskIds\":{{{}}},\"monitorTimings\":{{\"list_tasks_ms\":{},\"worker_scan_ms\":{},\"mailbox_delivery_ms\":0,\"total_ms\":{},\"updated_at\":{}}}}}\n",
+        task_status_by_id,
+        worker_alive_by_name,
+        worker_state_by_name,
+        worker_turn_count_by_name,
+        worker_task_id_by_name,
+        merged_mailbox_notified,
+        previous_completed_event_task_ids,
+        monitor_ms,
+        monitor_ms,
+        monitor_ms,
+        json_string(&updated_at),
+    );
+
+    write(
+        team_dir(team_name, cwd).join("monitor-snapshot.json"),
+        snapshot,
+    )
+    .map_err(|err| format!("failed writing monitor snapshot: {err}"))
+}
+
+fn collect_mailbox_notified_map(team_name: &str, cwd: &str) -> String {
+    let mailbox_dir = team_dir(team_name, cwd).join("mailbox");
+    let Ok(entries) = read_dir(mailbox_dir) else {
+        return String::new();
+    };
+
+    let mut notified = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(raw) = read_to_string(path) else {
+            continue;
+        };
+        for message_body in extract_json_array_entries_for_key(&raw, "messages") {
+            let Some(message_id) = extract_json_string(message_body, "message_id") else {
+                continue;
+            };
+            let Some(notified_at) = extract_json_string(message_body, "notified_at") else {
+                continue;
+            };
+            if notified_at.trim().is_empty() {
+                continue;
+            }
+            notified.push(format!(
+                "{}:{}",
+                json_string(&message_id),
+                json_string(&notified_at)
+            ));
+        }
+    }
+    notified.join(",")
+}
+
+fn merge_json_object_entries(previous: &str, current: &str) -> String {
+    if previous.trim().is_empty() {
+        return current.to_string();
+    }
+    if current.trim().is_empty() {
+        return previous.to_string();
+    }
+
+    let mut entries = previous.to_string();
+    let current_ids = split_json_object_entries(current)
+        .into_iter()
+        .filter_map(|entry| extract_json_object_entry_key(entry))
+        .collect::<Vec<_>>();
+    for entry in split_json_object_entries(previous) {
+        if let Some(key) = extract_json_object_entry_key(entry) {
+            if current_ids.iter().any(|current_key| current_key == &key) {
+                entries = remove_json_object_entry(&entries, &key);
+            }
+        }
+    }
+    if entries.trim().is_empty() {
+        current.to_string()
+    } else {
+        format!("{entries},{current}")
+    }
+}
+
+fn split_json_object_entries(raw: &str) -> Vec<&str> {
+    split_top_level_entries(raw, '{', '}')
+}
+
+fn split_top_level_entries(raw: &str, open: char, close: char) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in raw.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            c if c == open => depth += 1,
+            c if c == close => depth -= 1,
+            ',' if depth == 0 => {
+                let entry = raw[start..index].trim();
+                if !entry.is_empty() {
+                    entries.push(entry);
+                }
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = raw[start..].trim();
+    if !tail.is_empty() {
+        entries.push(tail);
+    }
+    entries
+}
+
+fn extract_json_object_entry_key(entry: &str) -> Option<String> {
+    let trimmed = entry.trim();
+    if !trimmed.starts_with('"') {
+        return None;
+    }
+    let end = trimmed[1..].find('"')?;
+    Some(trimmed[1..1 + end].to_string())
+}
+
+fn remove_json_object_entry(raw: &str, key: &str) -> String {
+    split_json_object_entries(raw)
+        .into_iter()
+        .filter(|entry| extract_json_object_entry_key(entry).as_deref() != Some(key))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn read_phase_state_raw(team_name: &str, cwd: &str) -> String {
+    read_to_string(team_dir(team_name, cwd).join("phase.json")).unwrap_or_default()
+}
+
+fn mode_state_path(cwd: &str, mode: &str) -> PathBuf {
+    PathBuf::from(cwd)
+        .join(".omx")
+        .join("state")
+        .join(format!("{mode}-state.json"))
+}
+
+fn append_team_event(
+    team_name: &str,
+    cwd: &str,
+    event_type: &str,
+    worker: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let events_path = team_dir(team_name, cwd)
+        .join("events")
+        .join("events.ndjson");
+    if let Some(parent) = events_path.parent() {
+        create_dir_all(parent).map_err(|err| format!("failed creating event dir: {err}"))?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&events_path)
+        .map_err(|err| format!("failed opening event log: {err}"))?;
+    writeln!(
+        file,
+        "{{\"event_id\":{},\"team\":{},\"type\":{},\"worker\":{},\"reason\":{},\"created_at\":{}}}",
+        json_string(&format!(
+            "native-runtime-{}-{}",
+            event_type,
+            iso_timestamp()
+        )),
+        json_string(team_name),
+        json_string(event_type),
+        json_string(worker),
+        json_string(reason),
+        json_string(&iso_timestamp()),
+    )
+    .map_err(|err| format!("failed writing event log: {err}"))
+}
+
+fn write_shutdown_request(
+    team_name: &str,
+    worker_name: &str,
+    requested_by: &str,
+    cwd: &str,
+    requested_at: &str,
+) -> Result<(), String> {
+    let path = team_dir(team_name, cwd)
+        .join("workers")
+        .join(worker_name)
+        .join("shutdown-request.json");
+    write(
+        path,
+        format!(
+            "{{\"requested_at\":{},\"requested_by\":{}}}\n",
+            json_string(requested_at),
+            json_string(requested_by),
+        ),
+    )
+    .map_err(|err| format!("failed writing shutdown request: {err}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShutdownAckRecord {
+    status: String,
+    reason: Option<String>,
+    updated_at: String,
+}
+
+fn read_shutdown_ack(
+    team_name: &str,
+    worker_name: &str,
+    cwd: &str,
+    min_updated_at: Option<&str>,
+) -> Option<ShutdownAckRecord> {
+    let path = team_dir(team_name, cwd)
+        .join("workers")
+        .join(worker_name)
+        .join("shutdown-ack.json");
+    let raw = read_to_string(path).ok()?;
+    let status = extract_json_string(&raw, "status")?;
+    if status != "accept" && status != "reject" {
+        return None;
+    }
+    let updated_at = extract_json_string(&raw, "updated_at")?;
+    if let Some(min_updated_at) = min_updated_at {
+        if updated_at.as_str() < min_updated_at {
+            return None;
+        }
+    }
+    Some(ShutdownAckRecord {
+        status,
+        reason: extract_json_string(&raw, "reason"),
+        updated_at,
+    })
+}
+
+fn extract_worker_names(raw: &str) -> Vec<String> {
+    extract_json_array_entries_for_key(raw, "workers")
+        .into_iter()
+        .filter_map(|body| extract_json_string(body, "name"))
+        .collect()
+}
+
+fn sync_root_team_mode_state_on_terminal_phase(
+    team_name: &str,
+    phase: &str,
+    cwd: &str,
+) -> Result<(), String> {
+    if phase != "complete" && phase != "failed" && phase != "cancelled" {
+        return Ok(());
+    }
+
+    let state_path = mode_state_path(cwd, "team");
+    let Ok(raw) = read_to_string(&state_path) else {
+        return Ok(());
+    };
+
+    let state_team_name = extract_json_string(&raw, "team_name").unwrap_or_default();
+    if !state_team_name.trim().is_empty() && state_team_name != team_name {
+        return Ok(());
+    }
+
+    let current_phase = extract_json_string(&raw, "current_phase").unwrap_or_default();
+    let active = extract_json_bool(&raw, "active").unwrap_or(true);
+    let completed_at = extract_json_string(&raw, "completed_at").unwrap_or_default();
+    if !active && current_phase == phase && !completed_at.is_empty() {
+        return Ok(());
+    }
+
+    let linked_ralph = extract_json_bool(&raw, "linked_ralph").unwrap_or(false);
+    let completed_at = if completed_at.is_empty() {
+        iso_timestamp()
+    } else {
+        completed_at
+    };
+
+    let mut fields = vec![
+        "\"active\":false".to_string(),
+        format!("\"current_phase\":{}", json_string(phase)),
+        format!("\"team_name\":{}", json_string(team_name)),
+        format!("\"completed_at\":{}", json_string(&completed_at)),
+    ];
+    if linked_ralph {
+        fields.push("\"linked_ralph\":true".to_string());
+    }
+
+    write(&state_path, format!("{{{}}}\n", fields.join(",")))
+        .map_err(|err| format!("failed syncing team mode state: {err}"))
+}
+
+fn sync_linked_ralph_mode_state_on_terminal_phase(
+    team_name: &str,
+    phase: &str,
+    cwd: &str,
+    now_iso: &str,
+) -> Result<(), String> {
+    if phase != "complete" && phase != "failed" && phase != "cancelled" {
+        return Ok(());
+    }
+
+    let team_state_path = mode_state_path(cwd, "team");
+    let ralph_state_path = mode_state_path(cwd, "ralph");
+    let Ok(team_raw) = read_to_string(&team_state_path) else {
+        return Ok(());
+    };
+    let Ok(ralph_raw) = read_to_string(&ralph_state_path) else {
+        return Ok(());
+    };
+
+    let state_team_name = extract_json_string(&team_raw, "team_name").unwrap_or_default();
+    if !state_team_name.trim().is_empty() && state_team_name != team_name {
+        return Ok(());
+    }
+    if !extract_json_bool(&team_raw, "linked_ralph").unwrap_or(false)
+        || !extract_json_bool(&ralph_raw, "linked_team").unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let terminal_at = extract_json_string(&team_raw, "completed_at")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| now_iso.to_string());
+    let current_phase = extract_json_string(&ralph_raw, "current_phase").unwrap_or_default();
+    let active = extract_json_bool(&ralph_raw, "active").unwrap_or(true);
+    let linked_terminal_phase =
+        extract_json_string(&ralph_raw, "linked_team_terminal_phase").unwrap_or_default();
+    let linked_terminal_at =
+        extract_json_string(&ralph_raw, "linked_team_terminal_at").unwrap_or_default();
+    let completed_at = extract_json_string(&ralph_raw, "completed_at").unwrap_or_default();
+    if !active
+        && current_phase == phase
+        && linked_terminal_phase == phase
+        && linked_terminal_at == terminal_at
+        && completed_at == terminal_at
+    {
+        return Ok(());
+    }
+
+    let mut fields = vec![
+        "\"active\":false".to_string(),
+        format!("\"current_phase\":{}", json_string(phase)),
+        "\"linked_mode\":\"team\"".to_string(),
+        "\"linked_team\":true".to_string(),
+        format!("\"linked_team_terminal_phase\":{}", json_string(phase)),
+        format!("\"linked_team_terminal_at\":{}", json_string(&terminal_at)),
+        format!("\"completed_at\":{}", json_string(&terminal_at)),
+        format!("\"last_turn_at\":{}", json_string(now_iso)),
+    ];
+    if let Some(iteration) = extract_json_number(&ralph_raw, "iteration") {
+        fields.push(format!("\"iteration\":{iteration}"));
+    }
+    if let Some(max_iterations) = extract_json_number(&ralph_raw, "max_iterations") {
+        fields.push(format!("\"max_iterations\":{max_iterations}"));
+    }
+    if let Some(started_at) = extract_json_string(&ralph_raw, "started_at") {
+        fields.push(format!("\"started_at\":{}", json_string(&started_at)));
+    }
+
+    write(&ralph_state_path, format!("{{{}}}\n", fields.join(",")))
+        .map_err(|err| format!("failed syncing linked ralph mode state: {err}"))
+}
+
+fn extract_json_array_body(raw: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let key_index = raw.find(&needle)?;
+    let after_key = &raw[key_index + needle.len()..];
+    let colon_index = after_key.find(':')?;
+    let value_start = after_key[colon_index + 1..].trim_start();
+    let body = slice_array_body(value_start)?;
+    Some(body.to_string())
+}
+
+fn extract_json_object_body(raw: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let key_index = raw.find(&needle)?;
+    let after_key = &raw[key_index + needle.len()..];
+    let colon_index = after_key.find(':')?;
+    let value_start = after_key[colon_index + 1..].trim_start();
+    let body = slice_object_body(value_start)?;
+    Some(body.to_string())
+}
+
+fn extract_json_array_entries_for_key<'a>(raw: &'a str, key: &str) -> Vec<&'a str> {
+    let needle = format!("\"{key}\"");
+    let Some(key_index) = raw.find(&needle) else {
+        return Vec::new();
+    };
+    let after_key = &raw[key_index + needle.len()..];
+    let Some(colon_index) = after_key.find(':') else {
+        return Vec::new();
+    };
+    let value_start = after_key[colon_index + 1..].trim_start();
+    let Some(array_body) = slice_array_body(value_start) else {
+        return Vec::new();
+    };
+    split_json_array_entries(array_body)
 }
 
 fn write_phase_state(
@@ -981,20 +1697,104 @@ fn write_phase_state(
     _no_failed_tasks: bool,
 ) -> Result<(), String> {
     let phase_path = team_dir(team_name, cwd).join("phase.json");
-    let current_fix_attempt = if phase == "team-fix" { 1 } else { 0 };
-    let max_fix_attempts = 3;
+    let previous = read_phase_state_raw(team_name, cwd);
+    let previous_phase = extract_json_string(&previous, "current_phase");
+    let previous_fix_attempt = extract_json_number(&previous, "current_fix_attempt").unwrap_or(0);
+    let previous_max_fix_attempts = extract_json_number(&previous, "max_fix_attempts").unwrap_or(3);
+    let previous_transitions =
+        extract_json_array_body(&previous, "transitions").unwrap_or_default();
+    let updated_at = iso_timestamp();
+
+    let transitions = if let Some(ref prev) = previous_phase {
+        append_phase_transitions(&previous_transitions, prev, phase, &updated_at)
+    } else {
+        String::new()
+    };
+    let current_fix_attempt = if phase == "team-fix" {
+        previous_fix_attempt.saturating_add(1)
+    } else {
+        0
+    };
 
     write(
         phase_path,
         format!(
-            "{{\"current_phase\":{},\"max_fix_attempts\":{},\"current_fix_attempt\":{},\"transitions\":[],\"updated_at\":{}}}\n",
+            "{{\"current_phase\":{},\"max_fix_attempts\":{},\"current_fix_attempt\":{},\"transitions\":[{}],\"updated_at\":{}}}\n",
             json_string(phase),
-            max_fix_attempts,
+            previous_max_fix_attempts,
             current_fix_attempt,
-            json_string("native-runtime"),
+            transitions,
+            json_string(&updated_at),
         ),
     )
     .map_err(|err| format!("failed writing phase state: {err}"))
+}
+
+fn append_phase_transitions(
+    previous_transitions: &str,
+    previous_phase: &str,
+    next_phase: &str,
+    updated_at: &str,
+) -> String {
+    let transition_path = build_phase_transition_path(previous_phase, next_phase);
+    if transition_path.is_empty() {
+        return previous_transitions.to_string();
+    }
+
+    let mut phases = Vec::with_capacity(transition_path.len() + 1);
+    phases.push(previous_phase.to_string());
+    phases.extend(transition_path);
+
+    let mut entries = previous_transitions.trim().to_string();
+    for pair in phases.windows(2) {
+        let entry = format!(
+            "{{\"from\":{},\"to\":{},\"at\":{}}}",
+            json_string(&pair[0]),
+            json_string(&pair[1]),
+            json_string(updated_at),
+        );
+        if entries.is_empty() {
+            entries = entry;
+        } else {
+            entries.push(',');
+            entries.push_str(&entry);
+        }
+    }
+    entries
+}
+
+fn build_phase_transition_path(previous_phase: &str, next_phase: &str) -> Vec<String> {
+    if previous_phase == next_phase {
+        return Vec::new();
+    }
+
+    match (previous_phase, next_phase) {
+        ("team-plan", "team-verify") => vec!["team-prd", "team-exec", "team-verify"],
+        ("team-prd", "team-verify") => vec!["team-exec", "team-verify"],
+        ("team-exec", "team-verify") => vec!["team-verify"],
+        ("team-fix", "team-verify") => vec!["team-exec", "team-verify"],
+        ("team-plan", "team-exec") => vec!["team-prd", "team-exec"],
+        ("team-prd", "team-exec") => vec!["team-exec"],
+        ("team-fix", "team-exec") => vec!["team-exec"],
+        ("team-plan", "team-fix") => vec!["team-prd", "team-exec", "team-verify", "team-fix"],
+        ("team-prd", "team-fix") => vec!["team-exec", "team-verify", "team-fix"],
+        ("team-exec", "team-fix") => vec!["team-verify", "team-fix"],
+        ("team-verify", "team-fix") => vec!["team-fix"],
+        ("team-plan", "complete") => vec!["team-prd", "team-exec", "team-verify", "complete"],
+        ("team-prd", "complete") => vec!["team-exec", "team-verify", "complete"],
+        ("team-exec", "complete") => vec!["team-verify", "complete"],
+        ("team-verify", "complete") => vec!["complete"],
+        ("team-fix", "complete") => vec!["complete"],
+        ("team-plan", "failed") => vec!["team-prd", "team-exec", "team-verify", "failed"],
+        ("team-prd", "failed") => vec!["team-exec", "team-verify", "failed"],
+        ("team-exec", "failed") => vec!["team-verify", "failed"],
+        ("team-verify", "failed") => vec!["failed"],
+        ("team-fix", "failed") => vec!["failed"],
+        _ => vec![next_phase],
+    }
+    .into_iter()
+    .map(|phase| phase.to_string())
+    .collect()
 }
 
 fn is_tmux_pane_alive(pane_id: &str) -> bool {
@@ -1314,6 +2114,21 @@ fn extract_json_number(raw: &str, key: &str) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
+fn extract_json_bool(raw: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{key}\"");
+    let key_index = raw.find(&needle)?;
+    let after_key = &raw[key_index + needle.len()..];
+    let colon_index = after_key.find(':')?;
+    let value_start = after_key[colon_index + 1..].trim_start();
+    if value_start.starts_with("true") {
+        Some(true)
+    } else if value_start.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn extract_string_array(raw: &str, key: &str) -> Vec<String> {
     let needle = format!("\"{key}\"");
     let Some(key_index) = raw.find(&needle) else {
@@ -1464,12 +2279,49 @@ fn slice_array_body(value_start: &str) -> Option<&str> {
     None
 }
 
+fn slice_object_body(value_start: &str) -> Option<&str> {
+    if !value_start.starts_with('{') {
+        return None;
+    }
+
+    let mut depth = 0_i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in value_start.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&value_start[1..index]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_task_results, detect_dead_worker_failure, extract_string_array,
-        parse_runtime_input, read_linked_ralph_profile, split_json_array_entries,
-        write_panes_sidecar_placeholder, RuntimeRunInput, RuntimeTaskInput,
+        collect_task_results, detect_dead_worker_failure, extract_json_bool, extract_string_array,
+        has_structured_verification_evidence, monitor_team, parse_runtime_input,
+        read_linked_ralph_profile, shutdown_team, split_json_array_entries,
+        write_panes_sidecar_placeholder, write_phase_state, RuntimeRunInput, RuntimeTaskInput,
     };
     use crate::test_support::env_lock;
     use std::env;
@@ -1609,6 +2461,412 @@ mod tests {
 
         unsafe { env::remove_var("OMX_JOB_ID") };
         unsafe { env::remove_var("OMX_JOBS_DIR") };
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn verification_evidence_heuristic_matches_ts_gate_shape() {
+        assert!(has_structured_verification_evidence(
+            "Verification:
+- PASS tests
+- Build: `cargo test`"
+        ));
+        assert!(!has_structured_verification_evidence(
+            "Implemented fix only"
+        ));
+    }
+
+    #[test]
+    fn extract_json_bool_reads_true_and_false_flags() {
+        assert_eq!(
+            extract_json_bool(r#"{"requires_code_change":true}"#, "requires_code_change"),
+            Some(true)
+        );
+        assert_eq!(
+            extract_json_bool(r#"{"requires_code_change":false}"#, "requires_code_change"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn monitor_team_holds_terminal_success_in_team_verify_without_verification_evidence() {
+        let temp =
+            std::env::temp_dir().join(format!("omx-runtime-run-monitor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let tasks_dir = team_dir.join("tasks");
+        create_dir_all(&tasks_dir).expect("task dir");
+        write(
+            tasks_dir.join("task-1.json"),
+            r#"{"id":"1","status":"completed","requires_code_change":true,"result":"done"}"#,
+        )
+        .expect("task state");
+
+        let first = monitor_team(&RuntimeRunInput {
+            team_name: "alpha".into(),
+            agent_types: vec!["codex".into()],
+            tasks: vec![RuntimeTaskInput {
+                subject: "one".into(),
+                description: "desc".into(),
+            }],
+            cwd: temp.to_string_lossy().into_owned(),
+            worker_count: 1,
+            poll_interval_ms: 10,
+        })
+        .expect("monitor ok")
+        .expect("snapshot");
+        assert_eq!(first.phase, "team-verify");
+
+        write(
+            tasks_dir.join("task-1.json"),
+            r#"{"id":"1","status":"completed","requires_code_change":true,"result":"Summary: done\nVerification:\n- PASS build: `cargo build`\n- PASS tests: `cargo test`"}"#,
+        )
+        .expect("task state with verification");
+
+        let second = monitor_team(&RuntimeRunInput {
+            team_name: "alpha".into(),
+            agent_types: vec!["codex".into()],
+            tasks: vec![RuntimeTaskInput {
+                subject: "one".into(),
+                description: "desc".into(),
+            }],
+            cwd: temp.to_string_lossy().into_owned(),
+            worker_count: 1,
+            poll_interval_ms: 10,
+        })
+        .expect("monitor ok")
+        .expect("snapshot");
+        assert_eq!(second.phase, "complete");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn monitor_snapshot_preserves_previous_notified_and_completed_maps() {
+        let temp = std::env::temp_dir().join(format!(
+            "omx-runtime-monitor-preserve-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let tasks_dir = team_dir.join("tasks");
+        let worker_dir = team_dir.join("workers").join("worker-1");
+        create_dir_all(&tasks_dir).expect("expected task dir");
+        create_dir_all(&worker_dir).expect("expected worker dir");
+
+        write(
+            tasks_dir.join("task-1.json"),
+            r#"{"id":"1","status":"in_progress"}"#,
+        )
+        .expect("task");
+        write(
+            worker_dir.join("identity.json"),
+            format!(r#"{{"pid":{}}}"#, std::process::id()),
+        )
+        .expect("identity");
+        write(
+            worker_dir.join("status.json"),
+            r#"{"state":"working","current_task_id":"1"}"#,
+        )
+        .expect("status");
+        write(worker_dir.join("heartbeat.json"), r#"{"turn_count":2}"#).expect("heartbeat");
+        write(
+            team_dir.join("monitor-snapshot.json"),
+            r#"{"taskStatusById":{"1":"completed"},"workerAliveByName":{"worker-1":true},"workerStateByName":{"worker-1":"idle"},"workerTurnCountByName":{"worker-1":1},"workerTaskIdByName":{"worker-1":"1"},"mailboxNotifiedByMessageId":{"msg-1":"2026-03-14T00:00:00Z"},"completedEventTaskIds":{"1":true},"monitorTimings":{"list_tasks_ms":1,"worker_scan_ms":1,"mailbox_delivery_ms":1,"total_ms":1,"updated_at":"2026-03-14T00:00:00Z"}}"#,
+        ).expect("seed snapshot");
+
+        let _snapshot = monitor_team(&RuntimeRunInput {
+            team_name: "alpha".into(),
+            agent_types: vec!["codex".into()],
+            tasks: vec![RuntimeTaskInput {
+                subject: "one".into(),
+                description: "desc".into(),
+            }],
+            cwd: temp.to_string_lossy().into_owned(),
+            worker_count: 1,
+            poll_interval_ms: 10,
+        })
+        .expect("monitor ok")
+        .expect("snapshot");
+
+        let monitor_snapshot =
+            read_to_string(team_dir.join("monitor-snapshot.json")).expect("snapshot reread");
+        assert!(monitor_snapshot
+            .contains("\"mailboxNotifiedByMessageId\":{\"msg-1\":\"2026-03-14T00:00:00Z\"}"));
+        assert!(monitor_snapshot.contains("\"completedEventTaskIds\":{\"1\":true}"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn write_phase_state_preserves_and_appends_transitions() {
+        let temp =
+            std::env::temp_dir().join(format!("omx-runtime-phase-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        create_dir_all(&team_dir).expect("team dir");
+        write(
+            team_dir.join("phase.json"),
+            r#"{"current_phase":"team-exec","max_fix_attempts":3,"current_fix_attempt":0,"transitions":[{"from":"team-plan","to":"team-exec","at":"2026-03-14T00:00:00Z"}],"updated_at":"2026-03-14T00:00:00Z"}"#,
+        )
+        .expect("phase file");
+
+        write_phase_state(
+            "alpha",
+            temp.to_string_lossy().as_ref(),
+            "team-verify",
+            true,
+        )
+        .expect("write phase");
+        let phase = read_to_string(team_dir.join("phase.json")).expect("phase reread");
+        assert!(phase.contains("\"current_phase\":\"team-verify\""));
+        assert!(phase.contains("\"from\":\"team-plan\",\"to\":\"team-exec\""));
+        assert!(phase.contains("\"from\":\"team-exec\",\"to\":\"team-verify\""));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn monitor_team_writes_monitor_snapshot_with_worker_state() {
+        let temp = std::env::temp_dir().join(format!(
+            "omx-runtime-monitor-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let tasks_dir = team_dir.join("tasks");
+        let worker_dir = team_dir.join("workers").join("worker-1");
+        create_dir_all(&tasks_dir).expect("expected task dir");
+        create_dir_all(&worker_dir).expect("expected worker dir");
+
+        write(
+            tasks_dir.join("task-1.json"),
+            r#"{"id":"1","status":"in_progress"}"#,
+        )
+        .expect("expected task file");
+        write(
+            worker_dir.join("identity.json"),
+            format!(r#"{{"pid":{}}}"#, std::process::id()),
+        )
+        .expect("expected identity file");
+        write(
+            worker_dir.join("status.json"),
+            r#"{"state":"working","current_task_id":"1","updated_at":"2026-03-14T00:00:00Z"}"#,
+        )
+        .expect("expected status file");
+        write(
+            worker_dir.join("heartbeat.json"),
+            format!(
+                r#"{{"pid":{},"last_turn_at":"2026-03-14T00:00:00Z","turn_count":7,"alive":true}}"#,
+                std::process::id()
+            ),
+        )
+        .expect("expected heartbeat file");
+
+        let _snapshot = monitor_team(&RuntimeRunInput {
+            team_name: "alpha".into(),
+            agent_types: vec!["codex".into()],
+            tasks: vec![RuntimeTaskInput {
+                subject: "one".into(),
+                description: "desc".into(),
+            }],
+            cwd: temp.to_string_lossy().into_owned(),
+            worker_count: 1,
+            poll_interval_ms: 10,
+        })
+        .expect("expected monitor ok")
+        .expect("expected snapshot");
+
+        let monitor_snapshot = read_to_string(team_dir.join("monitor-snapshot.json"))
+            .expect("expected monitor snapshot file");
+        assert!(monitor_snapshot.contains("\"taskStatusById\":{\"1\":\"in_progress\"}"));
+        assert!(monitor_snapshot.contains("\"workerAliveByName\":{\"worker-1\":"));
+        assert!(monitor_snapshot.contains("\"workerStateByName\":{\"worker-1\":\"working\"}"));
+        assert!(monitor_snapshot.contains("\"workerTurnCountByName\":{\"worker-1\":7}"));
+        assert!(monitor_snapshot.contains("\"workerTaskIdByName\":{\"worker-1\":\"1\"}"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn monitor_team_syncs_root_and_linked_ralph_terminal_state() {
+        let temp = std::env::temp_dir().join(format!(
+            "omx-runtime-linked-ralph-monitor-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let tasks_dir = team_dir.join("tasks");
+        create_dir_all(&tasks_dir).expect("expected task dir");
+        write(
+            tasks_dir.join("task-1.json"),
+            r#"{"id":"1","status":"completed","requires_code_change":false}"#,
+        )
+        .expect("expected task file");
+        write(
+            temp.join(".omx").join("state").join("team-state.json"),
+            r#"{"active":true,"current_phase":"team-exec","linked_ralph":true,"team_name":"alpha"}"#,
+        )
+        .expect("expected team state");
+        write(
+            temp.join(".omx").join("state").join("ralph-state.json"),
+            r#"{"active":true,"iteration":1,"max_iterations":10,"current_phase":"executing","started_at":"2026-03-11T00:00:00.000Z","linked_team":true}"#,
+        )
+        .expect("expected ralph state");
+
+        let snapshot = monitor_team(&RuntimeRunInput {
+            team_name: "alpha".into(),
+            agent_types: vec!["codex".into()],
+            tasks: vec![RuntimeTaskInput {
+                subject: "one".into(),
+                description: "desc".into(),
+            }],
+            cwd: temp.to_string_lossy().into_owned(),
+            worker_count: 1,
+            poll_interval_ms: 10,
+        })
+        .expect("expected monitor ok")
+        .expect("expected snapshot");
+        assert_eq!(snapshot.phase, "complete");
+
+        let team_state = read_to_string(temp.join(".omx").join("state").join("team-state.json"))
+            .expect("expected reread team state");
+        assert!(team_state.contains("\"active\":false"));
+        assert!(team_state.contains("\"current_phase\":\"complete\""));
+        assert!(team_state.contains("\"team_name\":\"alpha\""));
+        assert!(team_state.contains("\"linked_ralph\":true"));
+        assert!(team_state.contains("\"completed_at\":\""));
+
+        let ralph_state = read_to_string(temp.join(".omx").join("state").join("ralph-state.json"))
+            .expect("expected reread ralph state");
+        assert!(ralph_state.contains("\"active\":false"));
+        assert!(ralph_state.contains("\"current_phase\":\"complete\""));
+        assert!(ralph_state.contains("\"linked_team\":true"));
+        assert!(ralph_state.contains("\"linked_mode\":\"team\""));
+        assert!(ralph_state.contains("\"linked_team_terminal_phase\":\"complete\""));
+        assert!(ralph_state.contains("\"linked_team_terminal_at\":\""));
+        assert!(ralph_state.contains("\"completed_at\":\""));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn shutdown_team_with_ralph_syncs_linked_ralph_cancellation_before_cleanup() {
+        let temp = std::env::temp_dir().join(format!(
+            "omx-runtime-linked-ralph-shutdown-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let tasks_dir = team_dir.join("tasks");
+        create_dir_all(&tasks_dir).expect("expected task dir");
+        write(
+            tasks_dir.join("task-1.json"),
+            r#"{"id":"1","status":"completed"}"#,
+        )
+        .expect("expected task file");
+        write(
+            team_dir.join("config.json"),
+            r#"{"name":"alpha","worker_launch_mode":"interactive","lifecycle_profile":"linked_ralph","workers":[],"tmux_session":"omx-team-alpha","leader_pane_id":null,"hud_pane_id":null,"resize_hook_name":null,"resize_hook_target":null}"#,
+        )
+        .expect("expected team config");
+        write(
+            temp.join(".omx").join("state").join("team-state.json"),
+            r#"{"active":true,"current_phase":"team-exec","linked_ralph":true,"team_name":"alpha"}"#,
+        )
+        .expect("expected team state");
+        write(
+            temp.join(".omx").join("state").join("ralph-state.json"),
+            r#"{"active":true,"iteration":1,"max_iterations":10,"current_phase":"executing","started_at":"2026-03-11T00:00:00.000Z","linked_team":true}"#,
+        )
+        .expect("expected ralph state");
+
+        shutdown_team("alpha", temp.to_string_lossy().as_ref(), false, true)
+            .expect("expected shutdown ok");
+
+        assert!(!team_dir.exists());
+        let ralph_state = read_to_string(temp.join(".omx").join("state").join("ralph-state.json"))
+            .expect("expected reread ralph state");
+        assert!(ralph_state.contains("\"active\":false"));
+        assert!(ralph_state.contains("\"current_phase\":\"cancelled\""));
+        assert!(ralph_state.contains("\"linked_team_terminal_phase\":\"cancelled\""));
+        assert!(ralph_state.contains("\"linked_team_terminal_at\":\""));
+        assert!(ralph_state.contains("\"completed_at\":\""));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn shutdown_team_emits_shutdown_ack_event_for_rejection() {
+        let temp = std::env::temp_dir().join(format!(
+            "omx-runtime-shutdown-ack-event-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let worker_dir = team_dir.join("workers").join("worker-1");
+        create_dir_all(&worker_dir).expect("expected worker dir");
+        write(
+            team_dir.join("config.json"),
+            r#"{"name":"alpha","worker_launch_mode":"interactive","workers":[{"name":"worker-1","pane_id":"%999"}],"tmux_session":"omx-team-alpha","leader_pane_id":null,"hud_pane_id":null,"resize_hook_name":null,"resize_hook_target":null}"#,
+        )
+        .expect("expected team config");
+        write(
+            worker_dir.join("shutdown-ack.json"),
+            r#"{"status":"reject","reason":"busy","updated_at":"9999-01-01T00:00:00.000Z"}"#,
+        )
+        .expect("expected shutdown ack");
+
+        let error = shutdown_team("alpha", temp.to_string_lossy().as_ref(), false, false)
+            .expect_err("expected shutdown reject");
+        assert!(error.contains("shutdown_rejected:worker-1:busy"));
+
+        let events = read_to_string(team_dir.join("events").join("events.ndjson"))
+            .expect("expected event log");
+        assert!(events.contains("\"type\":\"shutdown_ack\""));
+        assert!(events.contains("\"worker\":\"worker-1\""));
+        assert!(events.contains("\"reason\":\"reject:busy\""));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn shutdown_team_writes_shutdown_request_before_processing_ack() {
+        let temp = std::env::temp_dir().join(format!(
+            "omx-runtime-shutdown-request-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let team_dir = temp.join(".omx").join("state").join("team").join("alpha");
+        let worker_dir = team_dir.join("workers").join("worker-1");
+        create_dir_all(&worker_dir).expect("expected worker dir");
+        write(
+            team_dir.join("config.json"),
+            r#"{"name":"alpha","worker_launch_mode":"interactive","workers":[{"name":"worker-1","pane_id":"%999"}],"tmux_session":"omx-team-alpha","leader_pane_id":null,"hud_pane_id":null,"resize_hook_name":null,"resize_hook_target":null}"#,
+        )
+        .expect("expected team config");
+        write(
+            worker_dir.join("shutdown-ack.json"),
+            r#"{"status":"reject","reason":"busy","updated_at":"9999-01-01T00:00:00.000Z"}"#,
+        )
+        .expect("expected shutdown ack");
+
+        let _ = shutdown_team("alpha", temp.to_string_lossy().as_ref(), false, false);
+
+        let request = read_to_string(worker_dir.join("shutdown-request.json"))
+            .expect("expected shutdown request");
+        assert!(request.contains("\"requested_by\":\"leader-fixed\""));
+        assert!(
+            request.contains("\"requested_at\":\""),
+            "expected shutdown request timestamp"
+        );
+
         let _ = std::fs::remove_dir_all(&temp);
     }
 }
