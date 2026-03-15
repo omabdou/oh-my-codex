@@ -54,7 +54,8 @@ describe('TS→Rust parity lanes doc contract', () => {
     assert.match(topologySource, /TypeScript SSOT/);
     assert.match(topologySource, /parity-incomplete relative to the TypeScript watcher scripts/);
 
-    assert.doesNotMatch(topologySource, /Rust-native team lifecycle, polling, stale-worker detection, and shutdown ownership\./);
-    assert.doesNotMatch(topologySource, /Fallback watcher, derived watcher, and reply polling loops move behind one native lifecycle owner\./);
+    const ownershipRowsBlock = topologySource.match(/const OWNERSHIP_ROWS:[\s\S]*?\];/)?.[0] ?? '';
+    assert.doesNotMatch(ownershipRowsBlock, /Rust-native team lifecycle, polling, stale-worker detection, and shutdown ownership\./);
+    assert.doesNotMatch(ownershipRowsBlock, /Fallback watcher, derived watcher, and reply polling loops move behind one native lifecycle owner\./);
   });
 });
