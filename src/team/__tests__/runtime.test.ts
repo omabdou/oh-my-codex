@@ -577,8 +577,9 @@ sleep 5
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      if (runtime) {
-        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      const activeRuntime = runtime;
+      if (activeRuntime) {
+        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -680,8 +681,9 @@ sleep 5
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      if (runtime) {
-        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      const activeRuntime = runtime;
+      if (activeRuntime) {
+        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -766,8 +768,9 @@ process.on('SIGTERM', () => process.exit(0));
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      if (runtime) {
-        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      const activeRuntime: TeamRuntime | null = runtime;
+      if (activeRuntime) {
+        await shutdownTeam(activeRuntime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -956,6 +959,137 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
       if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
       else delete process.env.OMX_TEAM_WORKER_CLI;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('startTeam recovers from interactive ready-wait timeout when the worker pane is still alive', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-interactive-ready-recovery-'));
+    const prevTmux = process.env.TMUX;
+    const prevTmuxPane = process.env.TMUX_PANE;
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const prevReadyTimeout = process.env.OMX_TEAM_READY_TIMEOUT_MS;
+    const prevLivePid = process.env.OMX_TEST_LIVE_PID;
+    let runtime: TeamRuntime | null = null;
+    let runtimeTeamName: string | null = null;
+    try {
+      await withMockTmuxFixture(
+        {
+          dirPrefix: 'omx-runtime-interactive-ready-recovery-bin-',
+          tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+case "\${1:-}" in
+  -V)
+    echo "tmux 3.4"
+    exit 0
+    ;;
+  display-message)
+    case "$*" in
+      *"#{window_width}"*)
+        echo "120"
+        ;;
+      *)
+        echo "leader:0 %1"
+        ;;
+    esac
+    exit 0
+    ;;
+  list-panes)
+    case "$*" in
+      *"pane_current_command"*)
+        printf "%%1\tnode\t'codex'\n"
+        ;;
+      *"#{pane_dead} #{pane_pid}"*)
+        echo "0 \${OMX_TEST_LIVE_PID:-1}"
+        ;;
+      *"#{pane_pid}"*)
+        echo "\${OMX_TEST_LIVE_PID:-1}"
+        ;;
+      *)
+        exit 0
+        ;;
+    esac
+    exit 0
+    ;;
+  capture-pane)
+    printf 'gpt-5 50%% left\n'
+    exit 0
+    ;;
+  split-window)
+    case "$*" in
+      *" -h "*)
+        echo "%2"
+        ;;
+      *)
+        echo "%3"
+        ;;
+    esac
+    exit 0
+    ;;
+  set-hook|run-shell|select-layout|set-window-option|select-pane|send-keys|kill-pane|kill-session)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+          binaries: [{
+            name: 'codex',
+            content: `#!/bin/sh
+exit 0
+`,
+          }],
+        },
+        async ({ tmuxLogPath }) => {
+          process.env.TMUX = 'leader-session,stub,0';
+          process.env.TMUX_PANE = '%1';
+          process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'interactive';
+          process.env.OMX_TEAM_WORKER_CLI = 'codex';
+          process.env.OMX_TEAM_READY_TIMEOUT_MS = '5000';
+          process.env.OMX_TEST_LIVE_PID = String(process.pid);
+
+          runtime = await withoutTeamWorkerEnv(() =>
+            startTeam(
+              'team-ready-recovery',
+              'interactive ready recovery',
+              'executor',
+              1,
+              [{ subject: 'recover startup', description: 'recover startup', owner: 'worker-1' }],
+              cwd,
+            ));
+          runtimeTeamName = runtime.teamName;
+
+          assert.equal(runtime.config.worker_launch_mode, 'interactive');
+          assert.equal(runtime.config.tmux_session, 'leader:0');
+
+          const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+          assert.match(tmuxLog, /capture-pane -t %2 -p/);
+          assert.match(tmuxLog, /send-keys -t %2 -l -- Read \.omx\/state\/team\/team-ready-recovery\/workers\/worker-1\/inbox\.md/);
+
+          await shutdownTeam(runtime.teamName, cwd, { force: true });
+          runtime = null;
+          runtimeTeamName = null;
+        },
+      );
+    } finally {
+      if (runtimeTeamName) {
+        await shutdownTeam(runtimeTeamName, cwd, { force: true }).catch(() => {});
+      }
+      if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
+      else delete process.env.TMUX;
+      if (typeof prevTmuxPane === 'string') process.env.TMUX_PANE = prevTmuxPane;
+      else delete process.env.TMUX_PANE;
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      if (typeof prevReadyTimeout === 'string') process.env.OMX_TEAM_READY_TIMEOUT_MS = prevReadyTimeout;
+      else delete process.env.OMX_TEAM_READY_TIMEOUT_MS;
+      if (typeof prevLivePid === 'string') process.env.OMX_TEST_LIVE_PID = prevLivePid;
+      else delete process.env.OMX_TEST_LIVE_PID;
       await rm(cwd, { recursive: true, force: true });
     }
   });

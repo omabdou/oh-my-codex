@@ -121,4 +121,64 @@ printf '{"status":"completed","teamName":"stub-team","taskResults":[],"duration"
       await rm(join(OMX_JOBS_DIR, `${startPayload?.jobId ?? 'missing'}-panes.json`), { force: true }).catch(() => null);
     }
   });
+
+  it('passes extended startup parity fields through to runtime-run stdin', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-start-parity-'));
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-team-start-parity-bin-'));
+    const runtimeStubPath = join(fakeBinDir, 'omx-runtime');
+    const stdinLogPath = join(fakeBinDir, 'runtime-stdin.json');
+    const prevRuntimeBin = process.env.OMX_RUNTIME_BIN;
+    let startPayload: { jobId?: string } | undefined;
+
+    try {
+      await writeFile(
+        runtimeStubPath,
+        `#!/bin/sh
+set -eu
+cat > "${stdinLogPath}"
+printf '{"status":"completed","teamName":"stub-team","taskResults":[],"duration":0,"workerCount":2}\n'
+`,
+      );
+      await chmod(runtimeStubPath, 0o755);
+      process.env.OMX_RUNTIME_BIN = runtimeStubPath;
+
+      const { handleTeamToolCall } = await loadTeamServer();
+      const startResponse = await handleTeamToolCall({
+        params: {
+          name: 'omx_run_team_start',
+          arguments: {
+            teamName: 'stub-team',
+            agentTypes: ['codex'],
+            workerCount: 2,
+            pollIntervalMs: 1500,
+            tasks: [{
+              subject: 'one',
+              description: 'desc',
+              owner: 'worker-1',
+              blocked_by: ['2'],
+              role: 'executor',
+            }],
+            cwd,
+          },
+        },
+      });
+
+      startPayload = JSON.parse(startResponse.content[0]?.text ?? '{}') as { jobId?: string };
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const stdinLog = await readFile(stdinLogPath, 'utf8');
+      assert.match(stdinLog, /"workerCount":2/);
+      assert.match(stdinLog, /"pollIntervalMs":1500/);
+      assert.match(stdinLog, /"owner":"worker-1"/);
+      assert.match(stdinLog, /"blocked_by":\["2"\]/);
+      assert.match(stdinLog, /"role":"executor"/);
+    } finally {
+      if (typeof prevRuntimeBin === 'string') process.env.OMX_RUNTIME_BIN = prevRuntimeBin;
+      else delete process.env.OMX_RUNTIME_BIN;
+      await rm(cwd, { recursive: true, force: true });
+      await rm(fakeBinDir, { recursive: true, force: true });
+      await rm(join(OMX_JOBS_DIR, `${startPayload?.jobId ?? 'missing'}.json`), { force: true }).catch(() => null);
+      await rm(join(OMX_JOBS_DIR, `${startPayload?.jobId ?? 'missing'}-panes.json`), { force: true }).catch(() => null);
+    }
+  });
 });

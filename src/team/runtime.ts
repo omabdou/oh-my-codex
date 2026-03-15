@@ -970,6 +970,9 @@ export async function startTeam(
       config.resize_hook_target = createdSession.resizeHookTarget;
       for (let i = 0; i < createdSession.workerPaneIds.length; i++) {
         workerPaneIds[i] = createdSession.workerPaneIds[i];
+        if (config.workers[i]) {
+          config.workers[i].pane_id = createdSession.workerPaneIds[i];
+        }
       }
     } else {
       config.tmux_session = `prompt-${sanitized}`;
@@ -1059,11 +1062,20 @@ export async function startTeam(
 
       await writeWorkerIdentity(sanitized, workerName, identity, leaderCwd);
 
-      // Wait for worker readiness
+      // Wait for worker readiness. If the pane is still alive after the ready wait
+      // times out, continue into startup dispatch/evidence handling instead of hard-failing
+      // immediately. This preserves forward progress for real tmux/Codex launches where
+      // the ready prompt is transient or not yet visible even though the worker is alive.
       if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt) {
         const ready = waitForWorkerReady(sessionName, i, workerReadyTimeoutMs, paneId);
         if (!ready) {
-          throw new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`);
+          const workerStillAlive = isWorkerAlive(sessionName, i, paneId);
+          if (!workerStillAlive) {
+            throw new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`);
+          }
+          console.warn(
+            `[omx:team] ${workerName}: ready wait timed out in ${sessionName}; pane still alive, continuing with startup dispatch recovery`,
+          );
         }
       }
 

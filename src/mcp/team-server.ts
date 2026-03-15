@@ -29,8 +29,16 @@ import { autoStartStdioMcpServer } from './bootstrap.js';
 const startSchema = z.object({
   teamName: z.string().min(1),
   agentTypes: z.array(z.string()).min(1),
-  tasks: z.array(z.object({ subject: z.string(), description: z.string() })).min(1),
+  tasks: z.array(z.object({
+    subject: z.string(),
+    description: z.string(),
+    owner: z.string().min(1).optional(),
+    blocked_by: z.array(z.string().min(1)).optional(),
+    role: z.string().min(1).optional(),
+  })).min(1),
   cwd: z.string().min(1),
+  workerCount: z.number().int().positive().optional(),
+  pollIntervalMs: z.number().int().positive().optional(),
 });
 
 const jobIdSchema = z.string().regex(/^omx-[a-z0-9]{1,12}$/);
@@ -256,12 +264,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 subject: { type: 'string' },
                 description: { type: 'string' },
+                owner: { type: 'string', description: 'Optional initial worker owner (for example worker-1)' },
+                blocked_by: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Optional task ids that block this task at startup',
+                },
+                role: { type: 'string', description: 'Optional task role used for worker routing/bootstrap' },
               },
               required: ['subject', 'description'],
             },
             description: 'Tasks to distribute to workers',
           },
           cwd: { type: 'string', description: 'Working directory (absolute path)' },
+          workerCount: { type: 'number', description: 'Optional explicit worker count override for runtime-run parity' },
+          pollIntervalMs: { type: 'number', description: 'Optional runtime monitor poll interval override in ms' },
         },
         required: ['teamName', 'agentTypes', 'tasks', 'cwd'],
       },
@@ -321,7 +338,14 @@ export async function handleTeamToolCall(request: {
   try {
     switch (name) {
       case 'omx_run_team_start': {
-        const { teamName, agentTypes, tasks, cwd: inputCwd } = startSchema.parse(a);
+        const {
+          teamName,
+          agentTypes,
+          tasks,
+          cwd: inputCwd,
+          workerCount,
+          pollIntervalMs,
+        } = startSchema.parse(a);
 
         const jobId = `omx-${Date.now().toString(36)}`;
         const runtimeBinaryPath = resolveRuntimeBinaryPath({ cwd: inputCwd, env: process.env });
@@ -336,7 +360,14 @@ export async function handleTeamToolCall(request: {
         job.pid = child.pid;
         persistJob(jobId, job);
 
-        child.stdin.write(JSON.stringify({ teamName, agentTypes, tasks, cwd: inputCwd }));
+        child.stdin.write(JSON.stringify({
+          teamName,
+          agentTypes,
+          tasks,
+          cwd: inputCwd,
+          ...(workerCount != null ? { workerCount } : {}),
+          ...(pollIntervalMs != null ? { pollIntervalMs } : {}),
+        }));
         child.stdin.end();
 
         const outChunks: Buffer[] = [];
