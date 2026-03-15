@@ -11,6 +11,7 @@ Safe retirement order for remaining JS/TS runtime owners on the phase-1 control-
   - `src/team/tmux-session.ts`
   - `src/cli/team.ts` (native pane-inspection command generation)
 - **What live HUD/runtime owner is now replaced under native mode:** when `OMX_RUNTIME_HUD_NATIVE=1`, the live HUD launch selected by `src/cli/runtime-native.ts` is `omx-runtime hud-watch`, so the Node-owned `hud --watch` launch path is bypassed for the shared HUD launch sites above.
+- **Fresh HUD truth guard:** this is a launch-seam cutover, not a full behavior-parity claim. `crates/omx-runtime/src/hud.rs` still provides a minimal watch/render loop rather than TS-equivalent `readAllState()` + render-token parity from `src/hud/index.ts`, `src/hud/state.ts`, and `src/hud/render.ts`.
 - **Strict evidence for that bypass:** `crates/omx-runtime/src/main.rs` now exposes `hud-watch`; `src/cli/runtime-native.ts` emits `omx-runtime hud-watch`; and `src/team/__tests__/runtime.test.ts:2075-2134` asserts tmux logs contain `'/tmp/crates/omx-runtime' hud-watch` and do **not** contain `node ... hud --watch` during HUD-pane restoration.
 - **What MCP/team-runner owner is now replaced/bypassed:** `src/mcp/team-server.ts` no longer spawns `node runtime-cli.js` directly; it resolves the native runtime binary and launches `runtime-run`, and `crates/omx-runtime/src/runtime_run.rs` now owns native startup/bootstrap, pane metadata, monitor glue, and shutdown glue for that seam without invoking Node startup helpers.
 - **Exact remaining blocker for a truthful 100% native claim:** the remaining risk is now parity, not a live Node startup dependency. `runtime-run` has native startup ownership, but its monitor/shutdown/bootstrap behavior is still a bounded subset of `src/team/runtime.ts`: it does not yet match worktree provisioning, richer worker launch-arg/model selection, startup dispatch retry/readiness evidence, mailbox delivery/rebalance, or shutdown ACK/event/linked-Ralph parity. The cut is now natively owned but still needs process-level proof plus behavior-parity review before any strong completion claim.
@@ -43,7 +44,7 @@ Safe retirement order for remaining JS/TS runtime owners on the phase-1 control-
 ## Verification snapshot (2026-03-13)
 - `cargo build --workspace` ✅ passes for all Rust workspace members.
 - `cargo test --workspace` ✅ passes, including `omx-runtime` coverage for the current `runtime-run` wrapper behavior.
-- `npm run build` ✅ passes.
+- `npm run build -- --pretty false` ✅ passes.
 - Fresh code-boundary review confirms `src/mcp/team-server.ts` launches `omx-runtime runtime-run`; `crates/omx-runtime/src/runtime_run.rs` no longer references `runtime-cli.js`, `START_TEAM_SCRIPT`, or `execute_node_json()`; and native `start_team()` now owns initial state/session/bootstrap creation while Rust still keeps simplified monitor/shutdown wrappers.
 - Targeted Node runtime suites ✅ pass:
   - `dist/cli/__tests__/runtime-native.test.js`
@@ -54,6 +55,7 @@ Safe retirement order for remaining JS/TS runtime owners on the phase-1 control-
   - `dist/team/__tests__/api-interop.test.js`
 - Process-boundary evidence remains assertion-backed in tests:
   - HUD native path checks for `omx-runtime hud-watch` and rejects `node ... hud --watch`.
+  - Parity truthfulness doc guards now also require explicit HUD launch-vs-behavior language, so docs fail if they over-claim full HUD parity on the native path.
   - Team MCP runtime seam now checks for `runtime-run` at the spawn boundary and for removal of `runtime-cli.js` references, and review now confirms the startup seam no longer routes through `START_TEAM_SCRIPT` or `dist/team/runtime.js`.
   - The remaining risk is structural parity, not a hidden Node bridge: `runtime_run.rs` now owns startup/bootstrap, but it still does not match all of `src/team/runtime.ts` for launch-arg selection, worktrees, dispatch/retry evidence, mailbox/rebalance behavior, and shutdown/linked-Ralph semantics.
   - Guarded reply-listener path checks for native `reply-listener` status/stop/start routing.

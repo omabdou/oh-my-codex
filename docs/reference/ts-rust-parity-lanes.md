@@ -7,7 +7,7 @@ A review-only parity map for the current hybrid runtime. TypeScript remains the 
 - `crates/omx-runtime/src/main.rs` exposes the current native boundary commands: `phase1-topology`, `capture-pane`, `hud-watch`, `reply-listener`, `notify-fallback`, `hook-derived`, and `runtime-run`.
 - `docs/reference/rust-runtime-phase1-cutover-order.md` already records that the spawn boundary is native for HUD, watcher, reply-listener, and MCP `runtime-run`; the remaining risk is behavioral parity rather than a hidden Node launcher.
 
-## Lane 1 — team state / runtime parity
+## Lane 1 — startup contract / runtime parity
 ### TypeScript SSOT contracts
 - `src/team/runtime.ts:725` — `startTeam()` owns the canonical team bootstrap flow.
 - `src/team/runtime.ts:1226` — `monitorTeam()` owns team-state reconciliation, expired-claim recovery, mailbox delivery, rebalance, verification gating, and monitor snapshot writes.
@@ -28,18 +28,19 @@ A review-only parity map for the current hybrid runtime. TypeScript remains the 
 - `src/mcp/team-server.ts:327-333` — MCP now spawns `omx-runtime runtime-run` at the runtime boundary.
 
 ### Verified gap summary
-Rust owns the launch seam, but does **not** yet match TS lifecycle semantics. The native monitor/shutdown path is still materially narrower than `src/team/runtime.ts`:
-- no expired-claim reclaim parity,
+Rust owns the launch seam, but does **not** yet match TS lifecycle semantics. The native startup/config path already persists `team_state_root`, `workspace_mode`, worker `role`, lifecycle profile, and bounded monitor metadata; however the native monitor/shutdown path is still materially narrower than `src/team/runtime.ts`:
+- no leader-session conflict parity,
+- no full worktree provisioning / detached-trigger parity,
+- no worker instruction-file / model-instruction parity,
 - no mailbox delivery / dispatch receipt parity,
 - no rebalance parity,
 - no structured verification evidence gate parity,
-- no full linked-Ralph shutdown/event parity beyond bounded terminal-state sync,
-- no full worktree / worker launch-arg / readiness handling parity.
+- no full linked-Ralph shutdown/event parity beyond bounded terminal-state sync.
 
 ### Cutover guidance
 Treat `runtime-run` as **native-owned but parity-incomplete**. Safe claim: launch boundary migrated. Unsafe claim: full team lifecycle parity.
 
-## Lane 2 — tmux / control-plane parity
+## Lane 2 — team runtime / tmux control-plane parity
 ### TypeScript SSOT contracts
 - `src/team/tmux-session.ts:760` — `createTeamSession()` owns pane/session topology.
 - `src/team/tmux-session.ts:975` — `restoreStandaloneHudPane()` owns HUD-pane restoration behavior.
@@ -62,7 +63,28 @@ Rust has bounded tmux primitives, but TS still owns the higher-order tmux contro
 ### Cutover guidance
 Native tmux parity is **primitive-complete enough for helpers**, not **session-orchestrator complete**.
 
-## Lane 3 — watcher / notification parity
+
+## Lane 3 — HUD behavior parity
+### TypeScript SSOT contracts
+- `src/hud/index.ts` owns the watch-loop TTY, cursor, SIGINT, and non-overlap behavior.
+- `src/hud/state.ts` owns `readAllState()` and scoped state loading.
+- `src/hud/render.ts` owns preset/token rendering behavior.
+
+### Rust ownership today
+- `crates/omx-runtime/src/hud.rs` exposes `hud-watch` and a minimal native watch loop / render surface.
+- `src/cli/runtime-native.ts` already routes the guarded native HUD launch to `omx-runtime hud-watch`.
+
+### Verified gap summary
+HUD launch ownership is native on the guarded path, but behavior is still parity-incomplete:
+- no TS-equivalent `readAllState()` implementation,
+- no TS-equivalent render token/preset behavior,
+- no verified TTY/cursor/SIGINT/non-overlap parity beyond a minimal watch loop.
+
+### Cutover guidance
+Safe claim: guarded HUD launch is native. Unsafe claim: HUD parity is complete.
+
+## Lane 4 — watcher / reply-listener parity
+
 ### TypeScript SSOT contracts
 - `scripts/notify-fallback-watcher.js` still defines the richer fallback watcher behavior, including tmux send-key injection and rollout-derived nudges.
 - `scripts/hook-derived-watcher.js` still defines derived-event watcher behavior and state/log file conventions.
@@ -87,7 +109,7 @@ Native tmux parity is **primitive-complete enough for helpers**, not **session-o
 ### Cutover guidance
 Safe claim: guarded watcher/reply launch path is native-aware. Unsafe claim: watcher behavior is fully parity-complete.
 
-## Lane 4 — MCP / CLI boundary mapping
+## Lane 5 — MCP / CLI boundary mapping and truthfulness
 ### TypeScript SSOT contracts
 - `src/mcp/team-server.ts` remains the canonical MCP tool surface for start/status/wait/cleanup semantics.
 - `src/cli/runtime-native.ts` remains the canonical TS selector/hydration layer for resolving packaged `omx-runtime` binaries.
@@ -112,6 +134,7 @@ The boundary map is clear: **CLI/MCP entry semantics are still TS-defined**, whi
 
 ### Unsafe statements
 - "Rust fully matches TS team-runtime behavior."
+- "HUD parity is complete."
 - "Watcher parity is complete."
 - "tmux control-plane parity is complete."
 - "Cutover is ready without additional lifecycle verification."
@@ -119,12 +142,13 @@ The boundary map is clear: **CLI/MCP entry semantics are still TS-defined**, whi
 
 ## Verification snapshot
 - `npm run build -- --pretty false` → PASS.
-- `node --test dist/verification/__tests__/phase1-runtime-surface-parity.test.js` → PASS (`4 passed; 0 failed`).
+- `node --test dist/verification/__tests__/phase1-runtime-surface-parity.test.js` → PASS (`5 passed; 0 failed`).
 - `node --test dist/verification/__tests__/ts-rust-parity-lanes-doc.test.js` → PASS (`1 passed; 0 failed`).
 - Code-boundary review confirms native command surfaces in `crates/omx-runtime/src/main.rs` and MCP spawn via `src/mcp/team-server.ts:327-333`.
 
 ## Recommended next review order
 1. `runtime_run.rs` vs `src/team/runtime.ts` startup/monitor/shutdown parity.
 2. `src/team/tmux-session.ts` session/topology/retry/teardown parity.
-3. watcher behavior parity beyond boundary-only native shims.
-4. final MCP/CLI truthfulness pass so docs never over-claim cutover readiness.
+3. HUD behavior parity beyond the native launch seam.
+4. watcher behavior parity beyond boundary-only native shims.
+5. final MCP/CLI truthfulness pass so docs never over-claim cutover readiness.

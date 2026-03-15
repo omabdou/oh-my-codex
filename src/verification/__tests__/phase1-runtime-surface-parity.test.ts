@@ -56,6 +56,31 @@ describe('phase-1 runtime surface parity contracts', () => {
     assert.match(runtimeMainSource, /omx-runtime hud-watch \[--once\]/);
   });
 
+
+  it('keeps the HUD lane truthfully scoped to native launch ownership rather than full behavioral parity', () => {
+    const hudIndexSource = readSource('src', 'hud', 'index.ts');
+    const hudStateSource = readSource('src', 'hud', 'state.ts');
+    const hudRenderSource = readSource('src', 'hud', 'render.ts');
+    const hudNativeSource = readSource('crates', 'omx-runtime', 'src', 'hud.rs');
+    const cutoverDoc = readSource('docs', 'reference', 'rust-runtime-phase1-cutover-order.md');
+    const parityDoc = readSource('docs', 'reference', 'ts-rust-parity-lanes.md');
+
+    assert.match(hudIndexSource, /readAllState/);
+    assert.match(hudIndexSource, /renderHud/);
+    assert.match(hudIndexSource, /buildPhase1HudWatchCommand/);
+    assert.match(hudStateSource, /export async function readAllState/);
+    assert.match(hudRenderSource, /export function renderHud/);
+
+    assert.match(hudNativeSource, /pub fn run_hud_watch/);
+    assert.match(hudNativeSource, /native-hud/);
+
+    assert.match(cutoverDoc, /What live HUD\/runtime owner is now replaced under native mode/i);
+    assert.match(cutoverDoc, /remaining risk is now parity, not a live Node startup dependency/i);
+    assert.match(parityDoc, /## Lane 3 — HUD behavior parity/);
+    assert.match(parityDoc, /HUD launch ownership is native on the guarded path, but behavior is still parity-incomplete/i);
+    assert.match(parityDoc, /Unsafe statements[\s\S]*HUD parity is complete/);
+  });
+
   it('keeps the watcher/notification lane mapped onto the exact TS watcher SSOT touchpoints and native operator subcommands', () => {
     const cliIndexSource = readSource('src', 'cli', 'index.ts');
     const replyListenerSource = readSource('src', 'notifications', 'reply-listener.ts');
