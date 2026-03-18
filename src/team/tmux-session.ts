@@ -293,12 +293,38 @@ function resolveHudHeightLines(heightLines: number): number {
   return normalized > 0 ? normalized : HUD_TMUX_TEAM_HEIGHT_LINES;
 }
 
+function resolveTeamMainPaneWidth(width: number): number | null {
+  if (!Number.isFinite(width)) return null;
+  const normalized = Math.floor(width);
+  if (normalized < 40) return null;
+  return Math.floor(normalized / 2);
+}
+
 function buildHudResizeCommand(hudPaneId: string, heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES): string {
   return `resize-pane -t ${buildHudPaneTarget(hudPaneId)} -y ${resolveHudHeightLines(heightLines)}`;
 }
 
 function buildBestEffortShellCommand(command: string): string {
   return `${command} >/dev/null 2>&1 || true`;
+}
+
+function buildTeamLayoutReconcileCommand(
+  teamTarget: string,
+  hudPaneId: string,
+  heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
+): string {
+  const quotedTeamTarget = shellQuoteSingle(teamTarget);
+  const hudResize = buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`);
+  return [
+    `tmux select-layout -t ${teamTarget} main-vertical >/dev/null 2>&1 || true`,
+    `width=$(tmux display-message -p -t ${quotedTeamTarget} '#{window_width}' 2>/dev/null || printf '')`,
+    `if [ -n "$width" ] && [ "$width" -ge 40 ] 2>/dev/null; then`,
+    `  main_width=$(( width / 2 ))`,
+    `  tmux set-window-option -t ${teamTarget} main-pane-width "$main_width" >/dev/null 2>&1 || true`,
+    `  tmux select-layout -t ${teamTarget} main-vertical >/dev/null 2>&1 || true`,
+    'fi',
+    hudResize,
+  ].join('; ');
 }
 
 /** Upper bound for tmux hook indices (signed 32-bit max). */
@@ -325,8 +351,13 @@ export function buildRegisterResizeHookArgs(
   hookName: string,
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
+  teamTarget?: string,
 ): string[] {
-  const resizeCommand = shellQuoteSingle(buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`));
+  const resizeCommand = shellQuoteSingle(
+    teamTarget
+      ? buildTeamLayoutReconcileCommand(teamTarget, hudPaneId, heightLines)
+      : buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`),
+  );
   return ['set-hook', '-t', hookTarget, buildResizeHookSlot(hookName), `run-shell -b ${resizeCommand}`];
 }
 
@@ -354,10 +385,14 @@ export function buildRegisterClientAttachedReconcileArgs(
   hookName: string,
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
+  teamTarget?: string,
 ): string[] {
   const hookSlot = buildClientAttachedHookSlot(hookName);
+  const reconcileCommand = teamTarget
+    ? buildTeamLayoutReconcileCommand(teamTarget, hudPaneId, heightLines)
+    : buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`);
   const oneShotCommand = shellQuoteSingle(
-    `${buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`)}; tmux set-hook -u -t ${hookTarget} ${hookSlot}`,
+    `${reconcileCommand}; tmux set-hook -u -t ${hookTarget} ${hookSlot}`,
   );
   return ['set-hook', '-t', hookTarget, hookSlot, `run-shell -b ${oneShotCommand}`];
 }
@@ -375,16 +410,24 @@ export function buildScheduleDelayedHudResizeArgs(
   hudPaneId: string,
   delaySeconds: number = HUD_RESIZE_RECONCILE_DELAY_SECONDS,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
+  teamTarget?: string,
 ): string[] {
   const delay = Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds : HUD_RESIZE_RECONCILE_DELAY_SECONDS;
-  return ['run-shell', '-b', `sleep ${delay}; ${buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`)}`];
+  const reconcileCommand = teamTarget
+    ? buildTeamLayoutReconcileCommand(teamTarget, hudPaneId, heightLines)
+    : buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`);
+  return ['run-shell', '-b', `sleep ${delay}; ${reconcileCommand}`];
 }
 
 export function buildReconcileHudResizeArgs(
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
+  teamTarget?: string,
 ): string[] {
-  return ['run-shell', buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`)];
+  const reconcileCommand = teamTarget
+    ? buildTeamLayoutReconcileCommand(teamTarget, hudPaneId, heightLines)
+    : buildBestEffortShellCommand(`tmux ${buildHudResizeCommand(hudPaneId, heightLines)}`);
+  return ['run-shell', reconcileCommand];
 }
 
 const ZSH_CANDIDATE_PATHS = ['/bin/zsh', '/usr/bin/zsh', '/usr/local/bin/zsh', '/opt/homebrew/bin/zsh'];
@@ -855,9 +898,9 @@ export function createTeamSession(
     const windowWidthResult = runTmux(['display-message', '-p', '-t', teamTarget, '#{window_width}']);
     if (windowWidthResult.ok) {
       const width = Number.parseInt(windowWidthResult.stdout.split('\n')[0]?.trim() || '', 10);
-      if (Number.isFinite(width) && width >= 40) {
-        const half = String(Math.floor(width / 2));
-        runTmux(['set-window-option', '-t', teamTarget, 'main-pane-width', half]);
+      const mainPaneWidth = resolveTeamMainPaneWidth(width);
+      if (mainPaneWidth !== null) {
+        runTmux(['set-window-option', '-t', teamTarget, 'main-pane-width', String(mainPaneWidth)]);
         runTmux(['select-layout', '-t', teamTarget, 'main-vertical']);
       }
     }
@@ -884,7 +927,7 @@ export function createTeamSession(
 
           resizeHookTarget = buildResizeHookTarget(sessionName, windowIndex);
           resizeHookName = buildResizeHookName(safeTeamName, sessionName, windowIndex, hudPaneId);
-          const registerHook = runTmux(buildRegisterResizeHookArgs(resizeHookTarget, resizeHookName, hudPaneId));
+          const registerHook = runTmux(buildRegisterResizeHookArgs(resizeHookTarget, resizeHookName, hudPaneId, HUD_TMUX_TEAM_HEIGHT_LINES, teamTarget));
           if (!registerHook.ok) {
             throw new Error(`failed to register resize hook ${resizeHookName}: ${registerHook.stderr}`);
           }
@@ -897,7 +940,7 @@ export function createTeamSession(
             hudPaneId,
           );
           const registerClientAttachedHook = runTmux(
-            buildRegisterClientAttachedReconcileArgs(resizeHookTarget, clientAttachedHookName, hudPaneId),
+            buildRegisterClientAttachedReconcileArgs(resizeHookTarget, clientAttachedHookName, hudPaneId, HUD_TMUX_TEAM_HEIGHT_LINES, teamTarget),
           );
           if (!registerClientAttachedHook.ok) {
             throw new Error(
@@ -906,11 +949,11 @@ export function createTeamSession(
           }
           registeredClientAttachedHook = { name: clientAttachedHookName, target: resizeHookTarget };
 
-          const delayed = runTmux(buildScheduleDelayedHudResizeArgs(hudPaneId));
+          const delayed = runTmux(buildScheduleDelayedHudResizeArgs(hudPaneId, undefined, HUD_TMUX_TEAM_HEIGHT_LINES, teamTarget));
           if (!delayed.ok) {
             throw new Error(`failed to schedule delayed HUD resize: ${delayed.stderr}`);
           }
-          const reconcile = runTmux(buildReconcileHudResizeArgs(hudPaneId));
+          const reconcile = runTmux(buildReconcileHudResizeArgs(hudPaneId, HUD_TMUX_TEAM_HEIGHT_LINES, teamTarget));
           if (!reconcile.ok) {
             throw new Error(`failed to reconcile HUD resize: ${reconcile.stderr}`);
           }

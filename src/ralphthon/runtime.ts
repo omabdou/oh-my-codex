@@ -64,8 +64,11 @@ export function parseRalphthonRuntimeState(input: unknown): RalphthonRuntimeStat
 export async function readRalphthonRuntimeState(cwd: string): Promise<RalphthonRuntimeState | null> {
   const path = canonicalRalphthonRuntimePath(cwd);
   if (!existsSync(path)) return null;
-  const raw = await readFile(path, 'utf-8');
-  return parseRalphthonRuntimeState(JSON.parse(raw));
+  try {
+    return parseRalphthonRuntimeState(JSON.parse(await readFile(path, 'utf-8')));
+  } catch {
+    return null;
+  }
 }
 
 export async function writeRalphthonRuntimeState(cwd: string, state: RalphthonRuntimeState): Promise<string> {

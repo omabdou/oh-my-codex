@@ -177,8 +177,11 @@ export function createRalphthonPrd(input: CreateRalphthonPrdInput): RalphthonPrd
 export async function readRalphthonPrd(cwd: string): Promise<RalphthonPrd | null> {
   const prdPath = resolveExistingRalphthonPrdPath(cwd);
   if (!prdPath) return null;
-  const raw = await readFile(prdPath, 'utf-8');
-  return parseRalphthonPrd(JSON.parse(raw));
+  try {
+    return parseRalphthonPrd(JSON.parse(await readFile(prdPath, 'utf-8')));
+  } catch {
+    return null;
+  }
 }
 
 export async function writeRalphthonPrd(cwd: string, prd: RalphthonPrd): Promise<string> {

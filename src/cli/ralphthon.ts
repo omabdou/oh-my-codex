@@ -182,7 +182,7 @@ async function ensureInitialRalphthonArtifacts(cwd: string, parsed: ParsedRalpht
     prd = await bootstrapRalphthonPrdFromExistingArtifacts(cwd, parsed.taskDescription);
   }
   if (!prd) {
-    prd = await bootstrapRalphthonPrdFromExistingArtifacts(cwd, parsed.taskDescription) ?? createRalphthonPrd({
+    prd = createRalphthonPrd({
       project: parsed.taskDescription,
       config: {
         ...(parsed.maxWaves == null ? {} : { maxHardeningWaves: parsed.maxWaves }),

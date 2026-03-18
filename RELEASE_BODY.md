@@ -1,84 +1,60 @@
-# oh-my-codex v0.10.3
+# oh-my-codex v0.10.4
 
-**21 PRs in the release window**
+**7 PRs + 1 direct commit in the release window**
 
-`0.10.3` is a feature-rich release following `0.10.2`. The release window began with the `0.10.2` tag at `2026-03-16 09:14 UTC`; the 21 PRs landed across two days, with the final merge (`#919`) at `2026-03-18 02:24 UTC`, for a shipped turnaround of about **41 hours** before this release-prep commit.
+`0.10.4` is a fast-follow patch release after `0.10.3`. The release window began with the `0.10.3` tag at `2026-03-18 02:53 UTC`; 8 non-merge commits landed afterward, capped by the `#941` merge commit (`ceccb94`) that disables implicit OMX cleanup on launch.
 
 ## Highlights
 
-### Native subagent integration (phase 1)
+### Ralph / Ralphthon hardening
 
-- Codex CLI native subagent spawning and coordination is now available as a first-pass integration
-- Skill references can bridge to native subagents with full lifecycle tracking
-- AGENTS.md setup now auto-generates a model capability table for quick reference
+- Ralph now includes a mandatory deslop pass in its workflow
+- Ralphthon state readers are more resilient and no longer perform a redundant bootstrap call
 
-### Autoresearch hardening and UX
+### Team tmux stability
 
-- Novice users can now be routed through deep-interview intake before launching autonomous research
-- Worktree paths moved to project-local `.omx/worktrees/` for isolation
-- Contracts and runtime deslopped for clarity
-- ESM `__dirname` error and macOS test compatibility fixed
+- Team layouts now auto-reconcile after terminal resize events
+- Detached tmux sessions are cleaned up when the leader pane exits
 
-### New: Ralphthon mode
+### Autoresearch + notification flow polish
 
-- Marathon execution mode with watchdog failure notifications, structured PRD orchestrator, and state recovery
+- Deep-interview can now launch autoresearch through the split-pane run path
+- Wrapped recent-output blocks are preserved in notifications
 
-### New: `omx cleanup`
+### Safer launch behavior
 
-- Detects and removes orphaned MCP server processes
-- Cleans stale `/tmp` artifacts
-
-### Security
-
-- High-severity transitive vulnerabilities patched with dependabot config added
+- Automatic stale-session cleanup is disabled during normal launch
+- Destructive cleanup is now explicit through `omx cleanup`
 
 ## What's Changed
 
 ### Features
-- feat: add Lore commit protocol to AGENTS.md template and executor prompt ([#916](https://github.com/Yeachan-Heo/oh-my-codex/pull/916))
-- feat(setup): generate AGENTS model capability table ([#894](https://github.com/Yeachan-Heo/oh-my-codex/pull/894))
-- feat: add skill_ref bridges and subagent tracking ([#892](https://github.com/Yeachan-Heo/oh-my-codex/pull/892))
-- feat: add native codex agent integration phase 1 ([#886](https://github.com/Yeachan-Heo/oh-my-codex/pull/886))
-- feat: add AGENTS autonomy directive ([#883](https://github.com/Yeachan-Heo/oh-my-codex/pull/883))
-- feat(autoresearch): add novice deep-interview intake bridge ([#906](https://github.com/Yeachan-Heo/oh-my-codex/pull/906))
-- feat(cli): add omx cleanup for orphaned MCP servers ([#901](https://github.com/Yeachan-Heo/oh-my-codex/pull/901))
-- feat(cli): wire ralphthon watchdog launch flow ([#880](https://github.com/Yeachan-Heo/oh-my-codex/pull/880))
+- feat: add mandatory deslop pass to ralph workflow ([#932](https://github.com/Yeachan-Heo/oh-my-codex/pull/932))
+- feat(team): auto-reconcile tmux team layout on resize ([#934](https://github.com/Yeachan-Heo/oh-my-codex/pull/934))
+- feat: launch autoresearch from interview via split-pane run path ([#933](https://github.com/Yeachan-Heo/oh-my-codex/pull/933))
 
 ### Fixes
-- fix: bootstrap packed-install smoke deps in worktrees ([#919](https://github.com/Yeachan-Heo/oh-my-codex/pull/919), closes [#917](https://github.com/Yeachan-Heo/oh-my-codex/issues/917))
-- fix: use deep-interview launch for autoresearch intake ([#915](https://github.com/Yeachan-Heo/oh-my-codex/pull/915), closes [#911](https://github.com/Yeachan-Heo/oh-my-codex/issues/911))
-- fix(native): prefer musl Linux assets before glibc ([#914](https://github.com/Yeachan-Heo/oh-my-codex/pull/914))
-- fix(autoresearch): use project-local worktree paths ([#913](https://github.com/Yeachan-Heo/oh-my-codex/pull/913))
-- fix: ship musl-first Linux native assets ([#907](https://github.com/Yeachan-Heo/oh-my-codex/pull/907))
-- fix: resolve __dirname ESM error in autoresearch guided flow ([#903](https://github.com/Yeachan-Heo/oh-my-codex/pull/903))
-- fix: clean up stale obsolete native agents ([#899](https://github.com/Yeachan-Heo/oh-my-codex/pull/899))
-- fix: stop generating skill agents ([#897](https://github.com/Yeachan-Heo/oh-my-codex/pull/897))
-- fix(autoresearch): replace execFileSync('cat') with readFileSync and fix macOS test compatibility ([#891](https://github.com/Yeachan-Heo/oh-my-codex/pull/891) — @lifrary)
-- fix(deps): patch high-severity transitive vulnerabilities and add dependabot config ([#889](https://github.com/Yeachan-Heo/oh-my-codex/pull/889), closes [#888](https://github.com/Yeachan-Heo/oh-my-codex/issues/888))
-- Add stale /tmp cleanup to omx cleanup ([#912](https://github.com/Yeachan-Heo/oh-my-codex/pull/912), closes [#908](https://github.com/Yeachan-Heo/oh-my-codex/issues/908))
+- fix: harden ralphthon state readers and remove redundant bootstrap call ([#935](https://github.com/Yeachan-Heo/oh-my-codex/pull/935))
+- fix: kill detached tmux session when leader pane exits ([#937](https://github.com/Yeachan-Heo/oh-my-codex/pull/937))
+- fix(notifications): preserve wrapped recent-output blocks ([#939](https://github.com/Yeachan-Heo/oh-my-codex/pull/939))
+- fix: disable implicit OMX cleanup on launch ([#941](https://github.com/Yeachan-Heo/oh-my-codex/pull/941))
 
-### Refactor
-- refactor(autoresearch): deslop contracts and runtime ([#918](https://github.com/Yeachan-Heo/oh-my-codex/pull/918))
-
-### Docs
-- docs: add autoresearch showcase hub with completed demos ([#884](https://github.com/Yeachan-Heo/oh-my-codex/pull/884))
-
-## Referenced issues
-
-[#888](https://github.com/Yeachan-Heo/oh-my-codex/issues/888), [#900](https://github.com/Yeachan-Heo/oh-my-codex/issues/900), [#908](https://github.com/Yeachan-Heo/oh-my-codex/issues/908), [#911](https://github.com/Yeachan-Heo/oh-my-codex/issues/911), [#917](https://github.com/Yeachan-Heo/oh-my-codex/issues/917)
+### Internal
+- chore: target dependabot PRs to dev branch (`ca33f8e`)
 
 ## Contributors
 
-- [@Yeachan-Heo](https://github.com/Yeachan-Heo) (Bellman)
+- Bellman
+- [@Yeachan-Heo](https://github.com/Yeachan-Heo)
 - [@lifrary](https://github.com/lifrary) (SEUNGWOO LEE)
 
 ## Local release verification checklist
 
 Run before tagging / publishing:
 
-- `node scripts/check-version-sync.mjs --tag v0.10.3`
+- `node scripts/check-version-sync.mjs --tag v0.10.4`
 - `npm run build`
 - `npm run check:no-unused`
 - `npm test`
 
-**Full Changelog**: [`v0.10.2...v0.10.3`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.10.2...v0.10.3)
+**Full Changelog**: [`v0.10.3...v0.10.4`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.10.3...v0.10.4)

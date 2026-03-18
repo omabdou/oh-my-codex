@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-03-18
+
+8 non-merge commits from `v0.10.3..ceccb94`. Contributors: Bellman, [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@lifrary](https://github.com/lifrary) (SEUNGWOO LEE).
+
+### Added
+- **Mandatory deslop pass in Ralph workflow** — Ralph now includes an explicit deslop cleanup pass in its workflow. (PR [#932](https://github.com/Yeachan-Heo/oh-my-codex/pull/932))
+- **Auto-reconcile tmux team layout on resize** — team sessions now repair their layout automatically after terminal resize events. (PR [#934](https://github.com/Yeachan-Heo/oh-my-codex/pull/934))
+- **Autoresearch launch from interview via split-pane run path** — deep-interview handoff can now launch autoresearch through the split-pane run path. (PR [#933](https://github.com/Yeachan-Heo/oh-my-codex/pull/933))
+
+### Changed
+- **Dependabot PRs now target `dev`** — dependency automation is now directed at the `dev` branch instead of the default release branch flow. (commit `ca33f8e`)
+
+### Fixed
+- **Ralphthon state readers hardened** — Ralphthon state reads are more resilient, and a redundant bootstrap call was removed. (PR [#935](https://github.com/Yeachan-Heo/oh-my-codex/pull/935))
+- **Detached tmux sessions cleaned up when the leader pane exits** — team teardown now kills detached tmux sessions when the leader pane is gone. (PR [#937](https://github.com/Yeachan-Heo/oh-my-codex/pull/937))
+- **Wrapped recent-output blocks preserved in notifications** — notification output formatting now keeps wrapped recent-output blocks intact. (PR [#939](https://github.com/Yeachan-Heo/oh-my-codex/pull/939))
+- **Implicit OMX cleanup disabled on launch** — launch no longer performs automatic stale-session cleanup; destructive cleanup is now explicit via `omx cleanup`. (PR [#941](https://github.com/Yeachan-Heo/oh-my-codex/pull/941))
+
 ## [0.10.3] - 2026-03-18
 
 46 commits across 21 PRs from `v0.10.2..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@lifrary](https://github.com/lifrary) (SEUNGWOO LEE).
