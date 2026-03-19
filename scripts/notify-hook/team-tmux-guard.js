@@ -97,7 +97,7 @@ export async function evaluatePaneInjectionReadiness(paneTarget, {
         };
       }
     }
-    if (paneRunningShell) {
+    if (paneRunningShell && paneCapture.trim() === '') {
       return {
         ok: false,
         sent: false,
