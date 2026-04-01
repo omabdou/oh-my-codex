@@ -57,25 +57,31 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
 ---
 
 <delegation_rules>
-Default posture: work directly. Delegate only when the task is multi-file, specialist-heavy, highly parallel, or materially safer with a dedicated role.
+Default posture: work directly.
 
-Use delegation for:
-- deep analysis, broad planning, focused review, specialist research, or large parallel work
-- non-trivial SDK/API/framework usage that benefits from `dependency-expert`
-- substantive implementation work that clearly benefits from `executor`
+Choose the lane before acting:
+- `$deep-interview` for unclear intent, missing boundaries, or explicit "don't assume" requests. This mode clarifies and hands off; it does not implement.
+- `$ralplan` when requirements are clear enough but plan, tradeoff, or test-shape review is still needed.
+- `$team` when execution splits into parallel lanes, shared blockers, or ongoing coordination.
+- **Solo execute** when the task is already scoped and one agent can finish + verify it directly.
 
-Do not delegate trivial work or use delegation as a substitute for reading the code.
+Delegate only when it materially improves quality, speed, or safety. Do not delegate trivial work or use delegation as a substitute for reading the code.
 For substantive code changes, `executor` is the default implementation role.
 Outside active `team`/`swarm` mode, use `executor` (or another standard role prompt) for implementation work; do not invoke `worker` or spawn Worker-labeled helpers in non-team mode.
 Reserve `worker` strictly for active `team`/`swarm` sessions and team-runtime bootstrap flows.
+Switch modes only for a concrete reason: unresolved ambiguity, coordination load, or a blocked current lane.
 </delegation_rules>
 
 <child_agent_protocol>
-When delegating:
-1. Choose the right role.
-2. Read `./.codex/prompts/{role}.md` first.
-3. Spawn the child with that prompt plus the concrete task.
-4. Keep the task bounded and verifiable.
+Leader responsibilities:
+1. Pick the mode and keep the user-facing brief current.
+2. Delegate only bounded, verifiable subtasks with clear ownership.
+3. Integrate results, decide follow-up, and own final verification.
+
+Worker responsibilities:
+1. Execute the assigned slice; do not rewrite the global plan or switch modes on your own.
+2. Stay inside the assigned write scope; report blockers, shared-file conflicts, and recommended handoffs upward.
+3. Ask the leader to widen scope or resolve ambiguity instead of silently freelancing.
 
 Rules:
 - Max 6 concurrent child agents.
@@ -219,39 +225,39 @@ Verification loop: identify what proves the claim, run the verification, read th
 </verification>
 
 <execution_protocols>
-Broad Request Detection:
-A request is broad when it uses vague verbs without targets, names no specific file or function, touches 3+ areas, or is a single sentence without a clear deliverable. For broad work: explore first, then plan if needed.
+Mode selection:
+- Use `$deep-interview` first when the request is broad, intent/boundaries are unclear, or the user says not to assume.
+- Use `$ralplan` when the requirements are clear enough but architecture, tradeoffs, or test strategy still need consensus.
+- Use `$team` when execution has multiple independent lanes, shared blockers, or durable coordination needs.
+- Otherwise execute directly in solo mode.
+- Do not change modes casually; switch only when evidence shows the current lane is mismatched or blocked.
 
-Command Routing:
+Command routing:
 - When `USE_OMX_EXPLORE_CMD` enables advisory routing, strongly prefer `omx explore` as the default surface for simple read-only repository lookup tasks (files, symbols, patterns, relationships).
 - For simple file/symbol lookups, use `omx explore` FIRST before attempting full code analysis.
-- Keep ambiguous, implementation-heavy, edit-heavy, or non-shell-only work on the normal Codex path.
-- If `omx explore` is unavailable or fails, gracefully fall back to the normal path.
-- Let `omx explore` keep direct inspection by default and use `omx sparkshell` only as an adaptive backend for qualifying read-only shell-native tasks.
-- For explicit tmux-pane / worker / leader / HUD inspection, prefer `omx sparkshell --tmux-pane ...` when a larger-tail read or bounded summary is useful. Sparkshell pane mode is explicit opt-in, not always-on.
 
 When to use what:
-- If the task is a simple read-only file/symbol/pattern/relationship lookup -> use `omx explore` first.
-- If the task is a noisy read-only shell command, verification run, repo-wide search/listing, or tmux-pane summary -> use `omx sparkshell`.
-- If the task needs edits, tests with exact raw stderr, MCP/web access, complex shell composition, or broad ambiguous analysis -> stay on the richer normal Codex path.
-- If `omx explore` or `omx sparkshell` returns incomplete or ambiguous results -> retry with a narrower prompt/command, then fall back to the normal path.
+- Use `omx explore --prompt ...` for simple read-only lookups.
+- Use `omx sparkshell` for noisy read-only shell commands, bounded verification runs, repo-wide listing/search, or tmux-pane summaries; `omx sparkshell --tmux-pane ...` is explicit opt-in.
+- Keep ambiguous, implementation-heavy, edit-heavy, or non-shell-only work on the richer normal path.
+- `omx explore` is a shell-only, allowlisted, read-only path; do not rely on it for edits, tests, diagnostics, MCP/web access, or complex shell composition.
+- If `omx explore` or `omx sparkshell` is incomplete or ambiguous, retry narrower and gracefully fall back to the normal path.
 
-Explore Usage:
-- Use `omx explore` as the default surface for simple read-only file, symbol, pattern, and relationship lookups.
-- Keep `omx explore` prompts narrow and concrete; prefer a single lookup goal or a small related cluster over broad multi-part investigation.
-- Prefer `omx explore --prompt ...` for quick one-off lookups and `omx explore --prompt-file ...` for longer reusable briefs.
-- Good explore examples: `omx explore --prompt "which files define TeamPolicy"` and `omx explore --prompt "find usages of buildExploreRoutingGuidance"`.
-- Expect a shell-only, allowlisted, read-only path; do not rely on `omx explore` for edits, tests, diagnostics, MCP/web access, or complex multi-command shell composition.
-- If `omx explore` cannot answer safely, stalls, or returns incomplete results, retry with a narrower prompt or fall back to the richer normal path.
+Leader vs worker:
+- The leader chooses the mode, keeps the brief current, delegates bounded work, and owns verification plus stop/escalate calls.
+- Workers execute their assigned slice, do not re-plan the whole task or switch modes on their own, and report blockers or recommended handoffs upward.
+- Workers escalate shared-file conflicts, scope expansion, or missing authority to the leader instead of freelancing.
 
-Sparkshell Usage:
-- Protect context budget by default: strongly prefer `omx sparkshell` for noisy read-only and verification commands where full raw output is usually wasteful.
-- Prefer `omx sparkshell` for repository search/listing, bounded file reads, build/test/typecheck runs, and tmux-pane summarization.
-- Good sparkshell examples: `omx sparkshell -- rg -n "TeamPolicy" src`, `omx sparkshell -- npm test`, and `omx sparkshell --tmux-pane %12`.
-- Treat `omx sparkshell` as an augmenting layer, not a full shell replacement; use raw shell when exact stdout/stderr, shell composition, or low-level debugging fidelity is required.
-- On successful verification commands, prefer compact summaries over full logs.
-- On failed verification commands, capture only the critical evidence first: failing target, exit code, error type, assertion or stack excerpt, and a small surrounding raw excerpt when available.
-- If `omx sparkshell` returns incomplete, ambiguous, or `summary unavailable` output, immediately retry with a more precise command or the raw shell.
+Stop / escalate:
+- Stop when the task is verified complete, the user says stop/cancel, or no meaningful recovery path remains.
+- Escalate to the user only for irreversible, destructive, or materially branching decisions, or when required authority is missing.
+- Escalate from worker to leader for blockers, scope expansion, shared ownership conflicts, or mode mismatch.
+- `deep-interview` and `ralplan` stop at a clarified artifact or approved-plan handoff; they do not implement unless execution mode is explicitly switched.
+
+Output contract:
+- Default update/final shape: current mode; action/result; evidence or blocker/next step.
+- Keep rationale once; do not restate the full plan every turn.
+- Expand only for risk, handoff, or explicit user request.
 
 Parallelization:
 - Run independent tasks in parallel.
