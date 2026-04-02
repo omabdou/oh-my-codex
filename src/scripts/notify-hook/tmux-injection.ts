@@ -17,13 +17,13 @@ import {
 } from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
+import { resolveManagedSessionContext, verifyManagedPaneTarget } from './managed-tmux.js';
 import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
 import {
   normalizeTmuxHookConfig,
   pickActiveMode,
   evaluateInjectionGuards,
   buildSendKeysArgv,
-  resolveCodexPane,
 } from '../tmux-hook-engine.js';
 
 function isHudPaneStartCommand(startCommand: any): boolean {
@@ -128,27 +128,35 @@ export async function resolveSessionToPane(sessionName: any): Promise<string | n
   return nonHudRows[0]?.paneId || null;
 }
 
-export async function resolvePaneTarget(target: any, fallbackPane: any, expectedCwd: any, modePane: any): Promise<any> {
-  const canonicalFallbackPane = safeString(fallbackPane).trim();
-  if (canonicalFallbackPane) {
-    try {
-      return await finalizeResolvedPane(canonicalFallbackPane, 'fallback_current_pane', expectedCwd);
-    } catch {
-      // Fall through to mode/config probes
-    }
+export async function resolvePaneTarget(target: any, expectedCwd: any, modePane: any, cwd: string, payload: any): Promise<any> {
+  const requiresManagedOwnership = safeString(cwd).trim() !== '' && safeString(payload?.session_id || payload?.['session-id'] || process.env.OMX_SESSION_ID || '').trim() !== '';
+  const managedContext = requiresManagedOwnership
+    ? await resolveManagedSessionContext(cwd, payload, { allowTeamWorker: false })
+    : { managed: false, reason: 'not_required', invocationSessionId: '', sessionState: null, expectedTmuxSessionName: '', currentTmuxSessionName: '' };
+  if (requiresManagedOwnership && !managedContext.managed) {
+    return { paneTarget: null, reason: managedContext.reason || 'unmanaged_session' };
   }
 
-  if (modePane) {
+  const canonicalModePane = safeString(modePane).trim();
+  if (canonicalModePane) {
     try {
-      const resolved = await resolveCanonicalPaneFromPaneTarget(modePane, expectedCwd);
+      const resolved = await resolveCanonicalPaneFromPaneTarget(canonicalModePane, expectedCwd);
       if (resolved.paneTarget) {
-        return {
-          ...resolved,
-          reason: resolved.reason === 'ok' ? 'fallback_mode_state_pane' : resolved.reason,
-        };
+        const ownership = requiresManagedOwnership
+          ? await verifyManagedPaneTarget(resolved.paneTarget, cwd, payload, { allowTeamWorker: false })
+          : { ok: true };
+        if (ownership.ok) {
+          return {
+            ...resolved,
+            reason: resolved.reason === 'ok' ? 'fallback_mode_state_pane' : resolved.reason,
+            source: 'mode_state',
+            healTarget: true,
+          };
+        }
+        return { paneTarget: null, reason: ownership.reason || 'pane_not_managed_session' };
       }
     } catch {
-      // Fall through to config probes
+      // Fall through to explicit config target
     }
   }
 
@@ -157,20 +165,52 @@ export async function resolvePaneTarget(target: any, fallbackPane: any, expected
   if (target.type === 'pane') {
     try {
       const resolved = await resolveCanonicalPaneFromPaneTarget(target.value, expectedCwd);
-      if (resolved.paneTarget) return resolved;
+      if (resolved.paneTarget) {
+        const ownership = requiresManagedOwnership
+          ? await verifyManagedPaneTarget(resolved.paneTarget, cwd, payload, { allowTeamWorker: false })
+          : { ok: true };
+        if (ownership.ok) {
+          return {
+            ...resolved,
+            reason: resolved.reason === 'ok' ? 'explicit_pane_target' : resolved.reason,
+            source: 'explicit_target',
+            healTarget: true,
+          };
+        }
+        return { paneTarget: null, reason: ownership.reason || 'pane_not_managed_session' };
+      }
     } catch {
       // Fall through
     }
-  } else {
-    try {
-      const paneId = await resolveSessionToPane(target.value);
-      if (paneId) return await finalizeResolvedPane(paneId, 'ok', expectedCwd);
-    } catch {
-      // Fall through
-    }
+    return { paneTarget: null, reason: 'target_not_found' };
   }
 
-  return { paneTarget: null, reason: 'target_not_found' };
+  try {
+    if (!requiresManagedOwnership) return { paneTarget: null, reason: 'target_session_requires_managed_context' };
+    const explicitSessionTarget = safeString(target.value).trim();
+    const expectedSessionTarget = safeString(managedContext.expectedTmuxSessionName).trim();
+    const sessionIdTarget = safeString(managedContext.invocationSessionId).trim();
+    const stateSessionTarget = safeString(managedContext.sessionState?.session_id).trim();
+    const allowedSessionTargets = new Set([expectedSessionTarget, sessionIdTarget, stateSessionTarget].filter(Boolean));
+    if (!allowedSessionTargets.has(explicitSessionTarget)) {
+      return { paneTarget: null, reason: 'target_session_not_managed' };
+    }
+    const paneId = await resolveSessionToPane(expectedSessionTarget);
+    if (!paneId) return { paneTarget: null, reason: 'target_not_found' };
+    const resolved = await finalizeResolvedPane(paneId, 'managed_session_target', expectedCwd);
+    if (!resolved.paneTarget) return resolved;
+    const ownership = await verifyManagedPaneTarget(resolved.paneTarget, cwd, payload, { allowTeamWorker: false });
+    if (!ownership.ok) {
+      return { paneTarget: null, reason: ownership.reason || 'pane_not_managed_session' };
+    }
+    return {
+      ...resolved,
+      source: 'explicit_target',
+      healTarget: true,
+    };
+  } catch {
+    return { paneTarget: null, reason: 'target_not_found' };
+  }
 }
 
 export async function handleTmuxInjection({
@@ -280,8 +320,7 @@ export async function handleTmuxInjection({
     turnId,
     timestamp: nowIso,
   }), sourceText);
-  const fallbackPane = resolveCodexPane();
-  const resolution = await resolvePaneTarget(config.target, fallbackPane, cwd, modePane);
+  const resolution = await resolvePaneTarget(config.target, cwd, modePane, cwd, payload);
   if (!resolution.paneTarget) {
     state.last_reason = resolution.reason;
     state.last_event_at = nowIso;
@@ -319,7 +358,7 @@ export async function handleTmuxInjection({
   }
 
   // Pane-canonical healing: persist resolved pane target so routing stops depending on session names or stale pane ids.
-  if (config.target && (config.target.type !== 'pane' || safeString(config.target.value).trim() !== paneTarget)) {
+  if (resolution.healTarget && config.target && (config.target.type !== 'pane' || safeString(config.target.value).trim() !== paneTarget)) {
     try {
       const healed = {
         ...(rawConfig && typeof rawConfig === 'object' ? rawConfig : {}),

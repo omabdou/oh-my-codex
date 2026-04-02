@@ -113,6 +113,17 @@ if [[ "\$cmd" == "display-message" ]]; then
   exit 0
 fi
 if [[ "\$cmd" == "list-panes" ]]; then
+  target=""
+  while [[ "\$#" -gt 0 ]]; do
+    case "\$1" in
+      -t) target="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -n "\$target" && "\$target" == "${'${OMX_TEST_TMUX_SESSION_NAME:-devsess}'}" ]]; then
+    printf '%%99\tnode\tcodex --model gpt-5\n'
+    exit 0
+  fi
   echo "%1 12345"
   exit 0
 fi
@@ -160,6 +171,7 @@ function runNotifyHook(
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
       ...(extraEnv.OMX_TEST_UNMANAGED_SESSION !== '1' && !extraEnv.OMX_TEAM_WORKER ? { OMX_SESSION_ID: 'sess-managed' } : {}),
+      ...(extraEnv.OMX_TEST_UNMANAGED_SESSION !== '1' && !extraEnv.OMX_TEAM_WORKER ? { OMX_TEST_TMUX_SESSION_NAME: buildTmuxSessionName(cwd, 'sess-managed') } : {}),
       TMUX_PANE: '%99',
       TMUX: '1',
       OMX_TEAM_WORKER: '',
@@ -415,6 +427,7 @@ describe('notify-hook auto-nudge', () => {
       const codexHome = join(cwd, 'codex-home');
       const fakeBinDir = join(cwd, 'fake-bin');
       const tmuxLogPath = join(cwd, 'tmux.log');
+      const managedSessionName = buildTmuxSessionName(cwd, 'sess-managed');
 
       await mkdir(logsDir, { recursive: true });
       await mkdir(stateDir, { recursive: true });
@@ -463,7 +476,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   exit 0
@@ -476,7 +489,7 @@ if [[ "$cmd" == "list-panes" ]]; then
       *) shift ;;
     esac
   done
-  if [[ "$target" == "devsess" ]]; then
+  if [[ "$target" == "${managedSessionName}" ]]; then
     printf "%%99\tsh\tbash\n%%100\tnode\tcodex --model gpt-5\n"
     exit 0
   fi
@@ -503,7 +516,6 @@ exit 0
       assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /display-message -t %99 -p #S/, 'should anchor off the active mode pane');
       assert.match(tmuxLog, /send-keys -t %100 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'should upgrade anchored shell pane to sibling codex pane');
     });
   });
@@ -515,6 +527,7 @@ exit 0
       const codexHome = join(cwd, 'codex-home');
       const fakeBinDir = join(cwd, 'fake-bin');
       const tmuxLogPath = join(cwd, 'tmux.log');
+      const managedSessionName = buildTmuxSessionName(cwd, 'sess-managed');
 
       await mkdir(logsDir, { recursive: true });
       await mkdir(workerStateRoot, { recursive: true });
@@ -585,6 +598,7 @@ exit 0
       const codexHome = join(cwd, 'codex-home');
       const fakeBinDir = join(cwd, 'fake-bin');
       const tmuxLogPath = join(cwd, 'tmux.log');
+      const managedSessionName = buildTmuxSessionName(cwd, 'sess-managed');
 
       await mkdir(logsDir, { recursive: true });
       await mkdir(stateDir, { recursive: true });
@@ -638,12 +652,12 @@ exit 0
       assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /display-message -t %99 -p #\{pane_current_command\}/);
+      assert.ok(tmuxLog.includes('display-message -p -t %99 #S'), 'should inspect the managed anchor pane before deciding');
       assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'shell pane should not receive auto-nudge injection');
     });
   });
 
-  it('upgrades the wrapper shell pane to the sibling live Codex pane before injecting', async () => {
+  it('injects into the managed current pane when the wrapper shell pane remains the canonical target', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -651,6 +665,7 @@ exit 0
       const codexHome = join(cwd, 'codex-home');
       const fakeBinDir = join(cwd, 'fake-bin');
       const tmuxLogPath = join(cwd, 'tmux.log');
+      const managedSessionName = buildTmuxSessionName(cwd, 'sess-managed');
 
       await mkdir(logsDir, { recursive: true });
       await mkdir(stateDir, { recursive: true });
@@ -685,11 +700,11 @@ shift || true
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%100" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
@@ -717,7 +732,7 @@ if [[ "$cmd" == "list-panes" ]]; then
       *) shift ;;
     esac
   done
-  if [[ "$target" == "devsess" ]]; then
+  if [[ "$target" == "${managedSessionName}" ]]; then
     printf "%%99\t1\tsh\\n%%100\t0\tcodex --model gpt-5\\n"
     exit 0
   fi
@@ -736,8 +751,8 @@ exit 0
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /display-message -p #S/);
-      assert.match(tmuxLog, /display-message -t %99 -p #\{pane_current_command\}/);
-      assert.match(tmuxLog, /send-keys -t %100 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.ok(tmuxLog.includes('display-message -p -t %99 #S'), 'should inspect the anchored shell pane before upgrading');
+      assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/);
     });
   });
 
@@ -749,6 +764,7 @@ exit 0
       const codexHome = join(cwd, 'codex-home');
       const fakeBinDir = join(cwd, 'fake-bin');
       const tmuxLogPath = join(cwd, 'tmux.log');
+      const managedSessionName = buildTmuxSessionName(cwd, 'sess-managed');
 
       await mkdir(logsDir, { recursive: true });
       await mkdir(stateDir, { recursive: true });
@@ -769,7 +785,7 @@ exit 0
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /display-message -p #S/);
-      assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'current implementation still injects in this copy-mode fixture');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'copy-mode pane should not receive auto-nudge injection');
     });
   });
 
@@ -813,8 +829,8 @@ exit 0
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /display-message -p #S/);
-      assert.doesNotMatch(tmuxLog, /capture-pane -t %99/, 'current canonical pane path no longer requires capture-pane here');
-      assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'current implementation still injects in this busy-pane fixture');
+      assert.match(tmuxLog, /capture-pane -t %99/, 'busy pane detection should inspect capture output');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'busy pane should not receive auto-nudge injection');
     });
   });
 
@@ -1593,7 +1609,7 @@ exit 0
     });
   });
 
-  it('does not nudge when TMUX_PANE is not set', async () => {
+  it('can still resolve the managed session pane when TMUX_PANE is not set', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -1624,7 +1640,7 @@ exit 0
 
       if (existsSync(tmuxLogPath)) {
         const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-        assert.doesNotMatch(tmuxLog, /send-keys.*-l yes, proceed/, 'should not nudge without pane');
+        assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'should fall back to the managed session pane when TMUX_PANE is absent');
       }
     });
   });

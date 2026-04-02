@@ -17,6 +17,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { existsSync } from 'node:fs';
 import { writeSessionStart } from '../session.js';
 import { tmpdir } from 'node:os';
+import { buildTmuxSessionName } from '../../cli/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = join(__dirname, '..', '..', '..', 'dist', 'scripts');
@@ -70,12 +71,24 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" ]]; then
-    echo "devsess"
+    echo "\${OMX_TEST_TMUX_SESSION_NAME:-devsess}"
     exit 0
   fi
   exit 0
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -n "$target" ]]; then
+    printf "%%99	node	codex --model gpt-5
+"
+    exit 0
+  fi
   echo "%1 12345"
   exit 0
 fi
@@ -108,6 +121,7 @@ function runNotifyHook(
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
       OMX_SESSION_ID: 'sess-managed-regression',
+      OMX_TEST_TMUX_SESSION_NAME: buildTmuxSessionName(cwd, 'sess-managed-regression'),
       TMUX_PANE: '%99',
       TMUX: '1',
       OMX_TEAM_WORKER: '',

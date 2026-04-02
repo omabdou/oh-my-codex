@@ -1061,6 +1061,58 @@ exit 0
     }
   });
 
+
+  it('resolves session-only dispatch targets without managed leader session context', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-dispatch-session-target-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    const logsDir = join(cwd, '.omx', 'logs');
+    const tmuxLogPath = join(cwd, 'tmux.log');
+    const fakeBinDir = join(cwd, 'fake-bin');
+    try {
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      await initTeamState('session-target-team', 'task', 'executor', 1, cwd);
+      const cfg = await readTeamConfig('session-target-team', cwd);
+      assert.ok(cfg);
+      if (!cfg) throw new Error('missing team config');
+      cfg.tmux_session = 'omx-team-session-target';
+      cfg.leader_pane_id = '%42';
+      if (Array.isArray(cfg.workers) && cfg.workers[0]) {
+        delete cfg.workers[0].pane_id;
+      }
+      await saveTeamConfig(cfg, cwd);
+
+      await enqueueDispatchRequest('session-target-team', {
+        kind: 'nudge',
+        to_worker: 'worker-1',
+        trigger_message: 'dispatch ping',
+      }, cwd);
+
+      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
+      const mod = await import(pathToFileURL(modulePath).href);
+      const prevPath = process.env.PATH;
+      process.env.PATH = `${fakeBinDir}:${prevPath || ''}`;
+      try {
+        await mod.drainPendingTeamDispatch({ cwd, stateDir, logsDir, maxPerTick: 5 });
+      } finally {
+        process.env.PATH = prevPath;
+      }
+
+      const requests = JSON.parse(await readFile(join(stateDir, 'team', 'session-target-team', 'dispatch', 'requests.json'), 'utf-8'));
+      const request = requests.find((entry: { to_worker?: string }) => entry.to_worker === 'worker-1');
+      assert.notEqual(request?.status, 'failed');
+      assert.doesNotMatch(JSON.stringify(request), /target_resolution_failed/);
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /list-panes -t omx-team-session-target/);
+      assert.match(tmuxLog, /send-keys -t %42 -l dispatch ping/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('skips non-hook transport preferences in hook consumer', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {

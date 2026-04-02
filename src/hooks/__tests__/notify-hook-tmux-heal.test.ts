@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildTmuxSessionName } from '../../cli/index.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
@@ -24,6 +26,44 @@ async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf-8')) as T;
 }
 
+
+function readLinuxStartTicks(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+    const commandEnd = stat.lastIndexOf(')');
+    if (commandEnd === -1) return null;
+    const remainder = stat.slice(commandEnd + 1).trim();
+    const fields = remainder.split(/\s+/);
+    if (fields.length <= 19) return null;
+    const startTicks = Number(fields[19]);
+    return Number.isFinite(startTicks) ? startTicks : null;
+  } catch {
+    return null;
+  }
+}
+
+function readLinuxCmdline(pid: number): string | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/cmdline`);
+    const text = raw.toString('utf-8').replace(/\0+/g, ' ').trim();
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeManagedSessionState(stateDir: string, cwd: string, sessionId: string): Promise<void> {
+  await writeJson(join(stateDir, 'session.json'), {
+    session_id: sessionId,
+    started_at: new Date().toISOString(),
+    cwd,
+    pid: process.pid,
+    platform: process.platform,
+    pid_start_ticks: readLinuxStartTicks(process.pid),
+    pid_cmdline: readLinuxCmdline(process.pid),
+  });
+}
+
 describe('notify-hook tmux target healing', () => {
   it('falls back to global mode state when scoped session has no allowed active mode', async () => {
     await withTempWorkingDir(async (cwd) => {
@@ -34,6 +74,7 @@ describe('notify-hook tmux target healing', () => {
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -41,7 +82,7 @@ describe('notify-hook tmux target healing', () => {
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'team-state.json'), { active: true, current_phase: 'team-exec' });
       await writeJson(join(stateDir, 'ralph-state.json'), { active: true, iteration: 0 });
       await writeJson(configPath, {
@@ -76,6 +117,10 @@ if [[ "$cmd" == "display-message" ]]; then
   fi
   if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
     echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_in_mode}" && "$target" == "%42" ]]; then
@@ -129,6 +174,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -136,7 +182,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
       await writeJson(configPath, {
         enabled: true,
@@ -162,7 +208,7 @@ if [[ "$cmd" == "list-panes" ]]; then
       *) shift ;;
     esac
   done
-  if [[ "$target" == "devsess" ]]; then
+  if [[ "$target" == "${managedSessionName}" ]]; then
     echo "%42 1"
     exit 0
   fi
@@ -204,7 +250,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   echo "bad display target: $target / $format" >&2
@@ -222,6 +268,7 @@ exit 1
       const payload = {
         cwd,
         type: 'agent-turn-complete',
+        session_id: sessionId,
         'thread-id': 'thread-test',
         'turn-id': 'turn-test',
         'input-messages': ['no marker here'],
@@ -258,6 +305,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -265,7 +313,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
       await writeJson(configPath, {
         enabled: true,
@@ -291,7 +339,7 @@ if [[ "$cmd" == "list-panes" ]]; then
       *) shift ;;
     esac
   done
-  if [[ "$target" == "devsess" ]]; then
+  if [[ "$target" == "${managedSessionName}" ]]; then
     echo "%42 1"
     exit 0
   fi
@@ -333,7 +381,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   echo "bad display target: $target / $format" >&2
@@ -351,6 +399,7 @@ exit 1
       const payload = {
         cwd,
         type: 'agent-turn-complete',
+        session_id: sessionId,
         'thread-id': 'thread-test-2',
         'turn-id': 'turn-test-2',
         'input-messages': ['no marker here'],
@@ -374,7 +423,7 @@ exit 1
     });
   });
 
-  it('does not guess a pane by shared cwd when canonical codex pane is unavailable', async () => {
+  it('resolves the explicit managed session target without shared-cwd guessing', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -383,6 +432,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -390,7 +440,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
       await writeJson(configPath, {
         enabled: true,
@@ -423,7 +473,7 @@ if [[ "$cmd" == "list-panes" ]]; then
     echo "%42\t${cwd}\t1\tdevsess"
     exit 0
   fi
-  if [[ "$target" == "devsess" ]]; then
+  if [[ "$target" == "${managedSessionName}" ]]; then
     echo "%42 1"
     exit 0
   fi
@@ -445,7 +495,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
@@ -467,6 +517,7 @@ exit 1
       const payload = {
         cwd,
         type: 'agent-turn-complete',
+        session_id: sessionId,
         'thread-id': 'thread-test-3',
         'turn-id': 'turn-test-3',
         'input-messages': ['no marker here'],
@@ -484,8 +535,8 @@ exit 1
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const hookState = await readJson<Record<string, unknown>>(hookStatePath);
-      assert.equal(hookState.last_reason, 'target_not_found');
-      assert.equal(hookState.total_injections ?? 0, 0);
+      assert.equal(hookState.last_reason, 'injection_sent');
+      assert.equal(hookState.total_injections, 1);
     });
   });
 
@@ -498,6 +549,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -505,7 +557,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
       await writeJson(configPath, {
         enabled: true,
@@ -546,7 +598,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%77" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
@@ -558,11 +610,25 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_in_mode}" && "$target" == "%99" ]]; then
     echo "0"
+    exit 0
+  fi
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "${managedSessionName}" ]]; then
+    printf "%%77\t1\tnode\tnode dist/cli/omx.js hud --watch\n%%99\t0\tcodex\tcodex\n"
     exit 0
   fi
   exit 1
@@ -615,6 +681,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -622,7 +689,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), {
         active: true,
         iteration: 0,
@@ -663,7 +730,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   echo "bad display target: $target / $format" >&2
@@ -685,6 +752,7 @@ exit 1
       const payload = {
         cwd,
         type: 'agent-turn-complete',
+        session_id: sessionId,
         'thread-id': 'thread-test-4',
         'turn-id': 'turn-test-4',
         'input-messages': ['no marker here'],
@@ -720,6 +788,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -727,7 +796,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), {
         active: true,
         iteration: 0,
@@ -773,7 +842,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
@@ -839,6 +908,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -846,7 +916,7 @@ exit 1
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeManagedSessionState(stateDir, cwd, sessionId);
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0, tmux_pane_id: '%42' });
       await writeJson(configPath, {
         enabled: true,
@@ -880,6 +950,10 @@ if [[ "$cmd" == "display-message" ]]; then
   fi
   if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
     echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "${managedSessionName}"
     exit 0
   fi
   if [[ "$format" == "#{pane_in_mode}" && "$target" == "%42" ]]; then

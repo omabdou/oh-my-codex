@@ -125,7 +125,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$fmt" == "#S" ]]; then
-    echo "session-test"
+    echo "\${OMX_TEST_TMUX_SESSION_NAME:-session-test}"
     exit 0
   fi
   exit 0
@@ -143,6 +143,20 @@ if [[ "$cmd" == "send-keys" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -t)
+        shift
+        target="$1"
+        ;;
+    esac
+    shift || true
+  done
+  if [[ -n "$target" ]]; then
+    printf "%%42\tcodex\tcodex\n"
+    exit 0
+  fi
   echo "%42 1"
   exit 0
 fi
@@ -698,6 +712,7 @@ describe('notify-fallback watcher', () => {
             PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
             CODEX_HOME: codexHome,
             OMX_SESSION_ID: 'sess-managed-fallback',
+            OMX_TEST_TMUX_SESSION_NAME: 'omx-fallback-auto-nudge-stalled-managed',
             TMUX: '1',
             TMUX_PANE: '%42',
             OMX_NOTIFY_FALLBACK_AUTO_NUDGE_STALL_MS: '5000',

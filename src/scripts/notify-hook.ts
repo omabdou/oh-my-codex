@@ -39,6 +39,8 @@ import { isLeaderStale, resolveLeaderStalenessThresholdMs, maybeNudgeTeamLeader 
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
 import { handleTmuxInjection } from './notify-hook/tmux-injection.js';
 import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
+import { isManagedOmxSession } from './notify-hook/managed-tmux.js';
+import { sendPaneInput } from './notify-hook/team-tmux-guard.js';
 import {
   buildOperationalContext,
   deriveAssistantSignalEvents,
@@ -531,23 +533,36 @@ async function main() {
       const { processCodeSimplifier } = await import('../hooks/code-simplifier/index.js');
       const csResult = processCodeSimplifier(cwd, stateDir);
       if (csResult.triggered) {
-        const csPaneId = await resolveNudgePaneTarget(stateDir);
-        if (csPaneId) {
-          const csText = `${csResult.message} ${DEFAULT_MARKER}`;
-          const { runProcess } = await import('./notify-hook/process-runner.js');
-          await runProcess('tmux', ['send-keys', '-t', csPaneId, '-l', csText], 3000);
-          await new Promise(r => setTimeout(r, 100));
-          await runProcess('tmux', ['send-keys', '-t', csPaneId, 'C-m'], 3000);
-          await new Promise(r => setTimeout(r, 100));
-          await runProcess('tmux', ['send-keys', '-t', csPaneId, 'C-m'], 3000);
-
+        const managedSession = await isManagedOmxSession(cwd, payload, { allowTeamWorker: false });
+        if (!managedSession) {
           const { logTmuxHookEvent } = await import('./notify-hook/log.js');
           await logTmuxHookEvent(logsDir, {
             timestamp: new Date().toISOString(),
-            type: 'code_simplifier_triggered',
-            pane_id: csPaneId,
-            file_count: csResult.message.split('\n').filter(l => l.trimStart().startsWith('- ')).length,
+            type: 'code_simplifier_skipped',
+            reason: 'unmanaged_session',
           });
+        } else {
+          const csPaneId = await resolveNudgePaneTarget(stateDir, cwd, payload);
+          if (csPaneId) {
+            const csText = `${csResult.message} ${DEFAULT_MARKER}`;
+            const sendResult = await sendPaneInput({
+              paneTarget: csPaneId,
+              prompt: csText,
+              submitKeyPresses: 2,
+              submitDelayMs: 100,
+            });
+            if (!sendResult.ok) {
+              throw new Error(sendResult.error || sendResult.reason || 'send_failed');
+            }
+
+            const { logTmuxHookEvent } = await import('./notify-hook/log.js');
+            await logTmuxHookEvent(logsDir, {
+              timestamp: new Date().toISOString(),
+              type: 'code_simplifier_triggered',
+              pane_id: csPaneId,
+              file_count: csResult.message.split('\n').filter(l => l.trimStart().startsWith('- ')).length,
+            });
+          }
         }
       }
     } catch {

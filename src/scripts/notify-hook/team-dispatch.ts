@@ -10,7 +10,7 @@ import { resolveBridgeStateDir, resolveRuntimeBinaryPath } from '../../runtime/b
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { runProcess } from './process-runner.js';
-import { resolvePaneTarget } from './tmux-injection.js';
+import { resolvePaneTarget, resolveSessionToPane } from './tmux-injection.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import {
   buildCapturePaneArgv,
@@ -367,7 +367,15 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
   if (!target) {
     return { ok: false, reason: 'missing_tmux_target' };
   }
-  const resolution = await resolvePaneTarget(target, '', cwd, '');
+  let resolution;
+  if (target.type === 'session') {
+    const paneId = await resolveSessionToPane(target.value).catch(() => null);
+    resolution = paneId
+      ? { paneTarget: paneId, reason: 'session_target_resolved' }
+      : { paneTarget: null, reason: 'target_not_found' };
+  } else {
+    resolution = await resolvePaneTarget(target, '', '', '', {});
+  }
   if (!resolution.paneTarget) {
     return { ok: false, reason: `target_resolution_failed:${resolution.reason}` };
   }

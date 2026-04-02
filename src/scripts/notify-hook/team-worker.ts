@@ -262,7 +262,7 @@ async function resolveCanonicalLeaderPaneId(_tmuxSession, leaderPaneId) {
   const normalizedLeaderPaneId = safeString(leaderPaneId).trim();
   if (normalizedLeaderPaneId) {
     try {
-      const resolved = await resolvePaneTarget({ type: 'pane', value: normalizedLeaderPaneId }, '', '', '');
+      const resolved = await resolvePaneTarget({ type: 'pane', value: normalizedLeaderPaneId }, '', '', '', {});
       const paneTarget = safeString(resolved?.paneTarget).trim();
       if (paneTarget) return paneTarget;
     } catch {
