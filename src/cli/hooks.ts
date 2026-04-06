@@ -15,6 +15,8 @@ Usage:
   omx hooks test       Dispatch synthetic turn-complete event to plugins
 
 Notes:
+  - Non-team OMX automation is native-hook-first.
+  - \`omx tmux-hook\` is reserved for team runtime and legacy tmux troubleshooting.
   - Native Codex hook ownership now lives in \`.codex/hooks.json\` and is managed by \`omx setup\`.
   - This command manages OMX plugin extensions under \`.omx/hooks/*.mjs\`; it does not own native Codex registration.
   - Plugins are enabled by default. Disable with OMX_HOOK_PLUGINS=0.
