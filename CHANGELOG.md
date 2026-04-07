@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-04-07
+
+Patch release for team status JSON hygiene, interactive worker PID metadata integrity, and release-collateral alignment after `0.12.0`.
+
+### Fixed
+- **Machine-readable team status output** — leader mailbox pruning no longer re-issues duplicate delivered-message bridge calls, so `omx team status --json` stays parseable instead of leaking mailbox-delivery stderr noise.
+- **Interactive worker PID capture** — team startup now resolves worker PIDs from the actual pane id and persists them into worker metadata for diagnostics and cleanup.
+
+### Changed
+- **Release metadata sync** — Node/Cargo package metadata, changelog, release body, and `0.12.1` release/readiness docs are aligned for the patch cut.
+
+### Verified
+- `npm run build`
+- `node --test dist/team/__tests__/state.test.js`
+- `node --test --test-name-pattern="startTeam captures interactive worker pid from the resolved pane id" dist/team/__tests__/runtime.test.js`
+- `npx biome lint src/team/state/mailbox.ts src/team/__tests__/state.test.ts src/team/runtime.ts src/team/__tests__/runtime.test.ts`
+- `node --test dist/cli/__tests__/version-sync-contract.test.js`
+
 ## [0.12.0] - 2026-04-06
 
 Minor release for native Codex hook ownership, first-party Bash pre/post tool guidance, runtime/team delivery hardening, and workflow-doc refresh after `0.11.13`.
