@@ -364,7 +364,7 @@ esac
       const tmuxCalls = await readFile(tmuxLog, "utf-8");
       assert.match(tmuxCalls, /list-panes/);
       assert.match(tmuxCalls, /split-window/);
-      assert.match(tmuxCalls, /resize-pane -t %9 -y 1/);
+      assert.match(tmuxCalls, /resize-pane -t %9 -y 3/);
     } finally {
       if (originalTmux === undefined) {
         delete process.env.TMUX;
