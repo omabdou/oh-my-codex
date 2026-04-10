@@ -35,11 +35,19 @@ function safeString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-async function readJsonIfExists(path: string): Promise<TransitionStateLike | null> {
+async function readJsonIfExists(
+  path: string,
+  options?: { mode?: TrackedWorkflowMode; throwOnParseError?: boolean },
+): Promise<TransitionStateLike | null> {
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(await readFile(path, 'utf-8')) as TransitionStateLike;
   } catch {
+    if (options?.throwOnParseError && options.mode) {
+      throw new Error(
+        `Cannot read ${options.mode} workflow state at ${path}. Clear or repair state via \`omx state clear --mode ${options.mode}\` or the \`omx_state.*\` MCP tools.`,
+      );
+    }
     return null;
   }
 }
@@ -56,7 +64,10 @@ async function visibleTrackedModes(cwd: string, sessionId?: string): Promise<Tra
       ? [getStatePath(mode, cwd, sessionId), getStatePath(mode, cwd)]
       : [getStatePath(mode, cwd)];
     for (const candidatePath of candidatePaths) {
-      const state = await readJsonIfExists(candidatePath);
+      const state = await readJsonIfExists(candidatePath, {
+        mode,
+        throwOnParseError: true,
+      });
       if (state?.active === true) {
         visibleModes.add(mode);
       }
