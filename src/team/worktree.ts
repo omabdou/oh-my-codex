@@ -189,6 +189,17 @@ function listWorktrees(repoRoot: string): GitWorktreeEntry[] {
   return entries;
 }
 
+function pruneStaleWorktreePath(repoRoot: string, worktreePath: string): void {
+  const result = spawnSync('git', ['worktree', 'prune'], {
+    cwd: repoRoot,
+    encoding: 'utf-8',
+    windowsHide: true,
+  });
+  if (result.status === 0) return;
+  const stderr = (result.stderr || '').trim();
+  throw new Error(stderr || `worktree_prune_failed:${worktreePath}`);
+}
+
 function resolveBranchName(input: WorktreePlanInput): string | null {
   if (!input.mode.enabled || input.mode.detached) return null;
 
@@ -370,7 +381,12 @@ export function ensureWorktree(
 ): EnsureWorktreeResult | { enabled: false } {
   if (!plan.enabled) return { enabled: false };
 
-  const allWorktrees = listWorktrees(plan.repoRoot);
+  let allWorktrees = listWorktrees(plan.repoRoot);
+  const staleAtPath = findWorktreeByPath(allWorktrees, plan.worktreePath);
+  if (staleAtPath && !existsSync(staleAtPath.path)) {
+    pruneStaleWorktreePath(plan.repoRoot, staleAtPath.path);
+    allWorktrees = listWorktrees(plan.repoRoot);
+  }
   const existingAtPath = findWorktreeByPath(allWorktrees, plan.worktreePath)
     ?? readWorktreeEntryFromPath(plan.repoRoot, plan.worktreePath);
   const expectedBranchRef = plan.branchName ? `refs/heads/${plan.branchName}` : null;

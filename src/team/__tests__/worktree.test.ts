@@ -161,6 +161,35 @@ describe('worktree ensure + rollback', () => {
     }
   });
 
+  it('recreates a detached worktree when git worktree list still contains a missing stale path', async () => {
+    const repo = await initRepo();
+    try {
+      const planned = planWorktreeTarget({
+        cwd: repo,
+        scope: 'launch',
+        mode: { enabled: true, detached: true, name: null },
+      });
+      assert.equal(planned.enabled, true);
+      if (!planned.enabled) return;
+
+      const created = ensureWorktree(planned);
+      assert.equal(created.enabled, true);
+      if (!created.enabled) return;
+
+      await rm(created.worktreePath, { recursive: true, force: true });
+      assert.equal(existsSync(created.worktreePath), false);
+
+      const recreated = ensureWorktree(planned);
+      assert.equal(recreated.enabled, true);
+      if (!recreated.enabled) return;
+      assert.equal(recreated.created, true);
+      assert.equal(recreated.reused, false);
+      assert.equal(existsSync(recreated.worktreePath), true);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('creates per-worker named branch and blocks branch-in-use collisions', async () => {
     const repo = await initRepo();
     try {
