@@ -324,6 +324,89 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("starts a fresh native session without inheriting stale task-scoped context", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-isolation-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const priorSessionId = "omx-old-session";
+      await mkdir(join(stateDir, "sessions", priorSessionId), { recursive: true });
+      await writeSessionStart(cwd, priorSessionId, {
+        nativeSessionId: "codex-native-old",
+      });
+      await writeJson(join(stateDir, "sessions", priorSessionId, "ralph-state.json"), {
+        active: true,
+        current_phase: "executing",
+      });
+      await writeJson(join(stateDir, "subagent-tracking.json"), {
+        schemaVersion: 1,
+        sessions: {
+          [priorSessionId]: {
+            session_id: priorSessionId,
+            leader_thread_id: "leader-1",
+            updated_at: new Date().toISOString(),
+            threads: {
+              "leader-1": {
+                thread_id: "leader-1",
+                kind: "leader",
+                first_seen_at: new Date().toISOString(),
+                last_seen_at: new Date().toISOString(),
+                turn_count: 1,
+              },
+              "sub-1": {
+                thread_id: "sub-1",
+                kind: "subagent",
+                first_seen_at: new Date().toISOString(),
+                last_seen_at: new Date().toISOString(),
+                turn_count: 1,
+              },
+            },
+          },
+        },
+      });
+      await writeFile(
+        join(cwd, ".omx", "notepad.md"),
+        [
+          "# OMX Notepad",
+          "",
+          "## PRIORITY",
+          "Preserve durable project guidance.",
+          "",
+          "## WORKING MEMORY",
+          "[2026-04-06T00:33:44Z] stale UI rework context snapshot .omx/context/ui-rework-plan-01-20260406T003344Z.md",
+        ].join("\n"),
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "codex-native-new",
+        },
+        {
+          cwd,
+          sessionOwnerPid: process.pid,
+        },
+      );
+
+      const sessionState = JSON.parse(
+        await readFile(join(stateDir, "session.json"), "utf-8"),
+      ) as { session_id?: string; native_session_id?: string };
+      assert.equal(sessionState.session_id, "codex-native-new");
+      assert.equal(sessionState.native_session_id, "codex-native-new");
+
+      const additionalContext = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext ?? "",
+      );
+      assert.match(additionalContext, /\[Priority notes\]/);
+      assert.match(additionalContext, /Preserve durable project guidance/);
+      assert.doesNotMatch(additionalContext, /stale UI rework context snapshot/);
+      assert.doesNotMatch(additionalContext, /\[Subagents\]/);
+      assert.doesNotMatch(additionalContext, /ralph phase: executing/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the Codex owner from ancestry without mistaking codex-native-hook wrappers for Codex", () => {
     const commands = new Map<number, string>([
       [2100, 'sh -c node "/repo/dist/scripts/codex-native-hook.js"'],

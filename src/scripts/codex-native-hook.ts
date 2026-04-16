@@ -19,7 +19,7 @@ import {
   writeTeamPhase,
 } from "../team/state.js";
 import { omxNotepadPath, omxProjectMemoryPath } from "../utils/paths.js";
-import { getStateFilePath } from "../mcp/state-paths.js";
+import { getStateFilePath, getStatePath } from "../mcp/state-paths.js";
 import {
   detectKeywords,
   detectPrimaryKeyword,
@@ -387,7 +387,7 @@ async function buildSessionStartContext(
 
   const modeSummaries: string[] = [];
   for (const mode of ["ralph", "autopilot", "ultrawork", "ultraqa", "ralplan", "deep-interview", "team"] as const) {
-    const state = await readModeState(mode, cwd);
+    const state = await readJsonIfExists(getStatePath(mode, cwd, sessionId));
     if (state?.active !== true || !isNonTerminalPhase(state.current_phase)) continue;
     if (mode === "team") {
       const teamName = safeString(state.team_name).trim();
@@ -435,9 +435,22 @@ async function buildSessionStartContext(
   if (existsSync(omxNotepadPath(cwd))) {
     try {
       const notepad = await readFile(omxNotepadPath(cwd), "utf-8");
-      const compact = notepad.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 3).join(" ");
-      if (compact) {
-        sections.push(`[Notepad]\n- ${compact.slice(0, 220)}`);
+      const header = "## PRIORITY";
+      const idx = notepad.indexOf(header);
+      if (idx >= 0) {
+        const nextHeader = notepad.indexOf("\n## ", idx + header.length);
+        const section = (
+          nextHeader < 0
+            ? notepad.slice(idx + header.length)
+            : notepad.slice(idx + header.length, nextHeader)
+        )
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .join(" ");
+        if (section) {
+          sections.push(`[Priority notes]\n- ${section.slice(0, 220)}`);
+        }
       }
     } catch {
       // best effort only
