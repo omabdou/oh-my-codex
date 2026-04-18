@@ -1306,7 +1306,6 @@ async function buildStopHookOutput(
   const canonicalSessionId = await resolveInternalSessionIdForPayload(cwd, sessionId);
   const threadId = readPayloadThreadId(payload);
   const ralphState = await readActiveRalphState(stateDir, canonicalSessionId);
-  const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
   const managedStopContext = await hasManagedStopContext(cwd, payload, canonicalSessionId);
   if (!ralphState) {
     const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
